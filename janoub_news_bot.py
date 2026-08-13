@@ -1808,7 +1808,12 @@ def log_published_title(title: str, pub_date_iso: str, embedding: Optional[list[
 
     embedding: متجه العنوان (اختياري) — يُفضَّل تمرير المتجه المحسوب أصلاً
     أثناء remove_duplicate_news (المخزَّن بـit["_title_embedding"]) بدل
-    طلب Gemini من جديد، حتى تبقى المقارنات المستقبلية متسقة."""
+    طلب Gemini من جديد، حتى تبقى المقارنات المستقبلية متسقة.
+
+    يُكتب الخبر أيضاً لجدول Supabase الدائم (bot_published_titles_log) عبر
+    db_log_published_title، عشان يدوم بين تشغيلات GitHub Actions المختلفة
+    (بخلاف هذا الملف المحلي اللي يُصفَّر كل تشغيلة على runner جديد). فشل أي
+    من الطبقتين لا يعطّل الأخرى إطلاقاً."""
     try:
         with open(PUBLISHED_TITLES_LOG_FILE, "r", encoding="utf-8") as f:
             raw = json.load(f)
@@ -1835,12 +1840,95 @@ def log_published_title(title: str, pub_date_iso: str, embedding: Optional[list[
     except OSError as e:
         log.warning(f"⚠️  تعذّر حفظ الخبر بسجل العناوين المحلي: {e}")
 
+    db_log_published_title(title, pub_date_iso, embedding)
+
 
 def get_recent_published_titles(hours: int = PUBLISHED_TITLES_MAX_AGE_HOURS) -> list[dict]:
-    """يعيد الأخبار المنشورة خلال آخر عدة ساعات من السجل المحلي (بدون أي
-    استعلام لـSupabase)، لمقارنتها بالأخبار الجديدة القادمة من تشغيلات لاحقة
-    (منع تكرار نفس الحدث من فيد آخر حتى لو نُشر بتشغيل سابق منفصل)."""
-    return _load_and_prune_published_titles_log(hours)
+    """يعيد الأخبار المنشورة خلال آخر عدة ساعات بدمج مصدرين:
+    1) السجل المحلي (published_titles_log.json) — يعمل بدون أي اتصال شبكة
+       لكن يُصفَّر كل تشغيلة جديدة على GitHub Actions.
+    2) جدول Supabase الدائم (bot_published_titles_log) — يدوم بين كل
+       التشغيلات، ويسد الفجوة اللي يتركها تصفير الملف المحلي.
+    لو تعذّر الوصول لـSupabase (خطأ شبكة/مفاتيح)، يبقى السجل المحلي وحده
+    يعمل بمعزل تام — الطبقة المحلية لا تتأثر إطلاقاً بفشل الطبقة الأخرى."""
+    local_rows = _load_and_prune_published_titles_log(hours)
+    db_rows = db_get_recent_published_titles(hours)
+
+    merged: list[dict] = list(local_rows)
+    seen = {(_normalize_title_for_dedup(r["title"]), r["pub_date"].isoformat()) for r in local_rows}
+    for row in db_rows:
+        key = (_normalize_title_for_dedup(row["title"]), row["pub_date"].isoformat())
+        if key in seen:
+            continue
+        seen.add(key)
+        merged.append(row)
+    return merged
+
+
+# ══════════════════════════════════════════════════════════════════════
+#  🗄️  سجل العناوين المنشورة بـSupabase (bot_published_titles_log) — يدوم
+#  بين كل تشغيلات GitHub Actions، بخلاف الملف المحلي أعلاه اللي يُصفَّر كل
+#  تشغيلة على runner جديد. يعمل بالتوازي مع السجل المحلي وليس بديلاً عنه.
+# ══════════════════════════════════════════════════════════════════════
+
+BOT_PUBLISHED_TITLES_TABLE = "bot_published_titles_log"
+
+
+def db_log_published_title(title: str, pub_date_iso: str, embedding: Optional[list[float]] = None) -> None:
+    """يضيف الخبر لجدول bot_published_titles_log بـSupabase. فشل هذا
+    الاستدعاء (شبكة/مفاتيح/جدول غير موجود) لا يوقف البوت أبداً — السجل
+    المحلي (published_titles_log.json) يبقى يعمل بمعزل تام."""
+    if not SUPABASE_URL or not SUPABASE_SERVICE_KEY:
+        return
+    url = f"{SUPABASE_URL}/rest/v1/{BOT_PUBLISHED_TITLES_TABLE}"
+    payload = {"title": title, "pub_date": pub_date_iso, "embedding": embedding}
+    try:
+        r = requests.post(url, headers=sb_headers(), json=payload, timeout=REQUEST_TIMEOUT)
+        if r.status_code not in (200, 201, 204):
+            log.warning(f"⚠️  تعذّر حفظ الخبر بسجل Supabase الدائم [{r.status_code}]: {r.text[:200]}")
+    except requests.RequestException as e:
+        log.warning(f"⚠️  تعذّر حفظ الخبر بسجل Supabase الدائم (خطأ اتصال): {e}")
+
+    # تنظيف الصفوف الأقدم من PUBLISHED_TITLES_MAX_AGE_HOURS — يمنع تضخم الجدول للأبد
+    try:
+        cutoff = (datetime.now(timezone.utc) - timedelta(hours=PUBLISHED_TITLES_MAX_AGE_HOURS)).isoformat()
+        requests.delete(
+            url, headers=sb_headers(), params={"pub_date": f"lt.{cutoff}"}, timeout=REQUEST_TIMEOUT,
+        )
+    except requests.RequestException as e:
+        log.warning(f"⚠️  تعذّر تنظيف سجل Supabase الدائم القديم: {e}")
+
+
+def db_get_recent_published_titles(hours: int = PUBLISHED_TITLES_MAX_AGE_HOURS) -> list[dict]:
+    """يجيب الأخبار المنشورة خلال آخر عدة ساعات من جدول bot_published_titles_log
+    بـSupabase. فشل الاستعلام يعيد [] بدل إيقاف البوت — السجل المحلي يبقى
+    يعمل كطبقة مستقلة تماماً."""
+    if not SUPABASE_URL or not SUPABASE_SERVICE_KEY:
+        return []
+    cutoff = (datetime.now(timezone.utc) - timedelta(hours=hours)).isoformat()
+    url = f"{SUPABASE_URL}/rest/v1/{BOT_PUBLISHED_TITLES_TABLE}"
+    params = {
+        "select": "title,pub_date,embedding",
+        "pub_date": f"gte.{cutoff}",
+        "order": "pub_date.desc",
+        "limit": "500",
+    }
+    try:
+        r = requests.get(url, headers=sb_headers(), params=params, timeout=REQUEST_TIMEOUT)
+        r.raise_for_status()
+        rows = r.json()
+    except (requests.RequestException, ValueError) as e:
+        log.warning(f"⚠️  تعذّر جلب سجل Supabase الدائم للعناوين المنشورة: {e}")
+        return []
+
+    out = []
+    for row in rows:
+        try:
+            pub_date = datetime.fromisoformat(row["pub_date"])
+        except (KeyError, TypeError, ValueError):
+            continue
+        out.append({"title": row.get("title", ""), "pub_date": pub_date, "embedding": row.get("embedding")})
+    return out
 
 
 def load_pending_scheduled() -> list:
