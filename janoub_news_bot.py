@@ -300,7 +300,7 @@ HEADLINE_MIN_PHOTO_VISIBLE = 90   # أقل ارتفاع من الصورة الأ
 # تُنشر، وليس مقصوصة). أي صورة (jpg/jpeg/png/webp) تضعها هنا تُقارَن تلقائياً
 # بكل صورة خبر جديدة (كاملة، مقابل كاملة) قبل رفعها. لو ما فيه أي صورة
 # بالمجلد، الفحص يُتجاوز تلقائياً وتُنشر الصور عادي (بدون توقف البوت).
-BLOCKED_LOGOS_DIR = os.path.join(BASE_DIR, "blocked_logos")
+BLOCKED_LOGOS_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "blocked_logos")
 
 # حجم "البصمة المرئية" (average hash) — 8 يعني مقارنة على أساس 64 بت
 LOGO_HASH_SIZE = 8
@@ -2641,18 +2641,12 @@ def _hamming_distance(a: int, b: int) -> int:
     return bin(a ^ b).count("1")
 
 
-def _load_blocked_logo_hashes() -> list:
-    """يقرأ كل صور الشعار من BLOCKED_LOGOS_DIR ويحسب بصمتها مرة واحدة فقط
-    (نتيجة مخزّنة بذاكرة التشغيل _BLOCKED_LOGO_HASHES_CACHE). يرجّع list
-    فارغة لو المجلد غير موجود أو فارغ، بدون إيقاف البوت."""
-    global _BLOCKED_LOGO_HASHES_CACHE
-    if _BLOCKED_LOGO_HASHES_CACHE is not None:
-        return _BLOCKED_LOGO_HASHES_CACHE
-
+def _load_local_blocked_logo_hashes() -> list:
+    """يقرأ كل صور الشعار من BLOCKED_LOGOS_DIR (مجلد الريبو المحلي) ويحسب
+    بصمتها. يرجّع list فارغة لو المجلد غير موجود أو فارغ، بدون إيقاف البوت."""
     import os
     hashes = []
     if Image is None or not os.path.isdir(BLOCKED_LOGOS_DIR):
-        _BLOCKED_LOGO_HASHES_CACHE = hashes
         return hashes
 
     for filename in os.listdir(BLOCKED_LOGOS_DIR):
@@ -2665,9 +2659,50 @@ def _load_blocked_logo_hashes() -> list:
         except Exception as e:
             log.warning(f"⚠️  تعذّر قراءة صورة الشعار ({filename}): {e}")
 
-    log.info(f"🖼️  تم تحميل {len(hashes)} صورة شعار محظور للمطابقة من {BLOCKED_LOGOS_DIR}")
-    _BLOCKED_LOGO_HASHES_CACHE = hashes
+    log.info(f"🖼️  تم تحميل {len(hashes)} صورة شعار محظور من المجلد المحلي ({BLOCKED_LOGOS_DIR})")
     return hashes
+
+
+def _load_supabase_blocked_logo_hashes() -> list:
+    """يقرأ بصمات الشعارات المحظورة من جدول blocked_logo_hashes بـ Supabase
+    (يُدار عبر لوحة التحكم — يسمح بإضافة/حذف بصمات بدون تعديل الكود أو
+    إعادة نشر البوت). يرجّع list فارغة عند أي خطأ اتصال (fail-open) بدون
+    إيقاف البوت."""
+    hashes = []
+    try:
+        r = requests.get(
+            f"{SUPABASE_URL}/rest/v1/blocked_logo_hashes",
+            headers=sb_headers(),
+            params={"select": "hash"},
+            timeout=REQUEST_TIMEOUT,
+        )
+        if r.status_code == 200:
+            for row in r.json():
+                try:
+                    hashes.append(int(row["hash"]))
+                except (ValueError, TypeError, KeyError):
+                    continue
+            log.info(f"🖼️  تم تحميل {len(hashes)} بصمة شعار محظور من Supabase (blocked_logo_hashes)")
+        else:
+            log.warning(f"⚠️  تعذّر قراءة جدول blocked_logo_hashes [{r.status_code}]: {r.text[:200]}")
+    except requests.RequestException as e:
+        log.warning(f"⚠️  فشل الاتصال بجدول blocked_logo_hashes (سيُتابَع بالمصدر المحلي فقط): {e}")
+    return hashes
+
+
+def _load_blocked_logo_hashes() -> list:
+    """يجمع بصمات الشعارات المحظورة من مصدرين معاً: المجلد المحلي
+    (BLOCKED_LOGOS_DIR) + جدول Supabase (blocked_logo_hashes). النتيجة
+    تُخزَّن بذاكرة التشغيل (_BLOCKED_LOGO_HASHES_CACHE) لتُحسب مرة واحدة
+    فقط. فشل أحد المصدرين لا يوقف الآخر."""
+    global _BLOCKED_LOGO_HASHES_CACHE
+    if _BLOCKED_LOGO_HASHES_CACHE is not None:
+        return _BLOCKED_LOGO_HASHES_CACHE
+
+    combined = _load_local_blocked_logo_hashes() + _load_supabase_blocked_logo_hashes()
+    log.info(f"🖼️  إجمالي بصمات الشعارات المحظورة (محلي + Supabase): {len(combined)}")
+    _BLOCKED_LOGO_HASHES_CACHE = combined
+    return combined
 
 
 def image_contains_blocked_logo(raw_bytes: bytes) -> bool:
