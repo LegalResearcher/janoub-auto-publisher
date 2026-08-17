@@ -371,7 +371,6 @@ def send_admin_alert(text: str) -> bool:
 # ══════════════════════════════════════════════════════════════════════
 
 AUTO_SEED_VIEWS = True
-GOOGLE_INDEXING_ENABLED = True
 
 
 def seed_views(post_id: str) -> None:
@@ -436,34 +435,22 @@ def seed_views(post_id: str) -> None:
 YEMEN_TZ = timezone(timedelta(hours=3))  # توقيت اليمن (Asia/Aden) — لا يوجد توقيت صيفي
 
 
-def build_canonical_url(slug: str, created_at_iso: str) -> str:
-    """يبني رابط المقال الرسمي (نفس صيغة postUrl.ts بالموقع): /YYYY/MM/DD/slug
-    ⚠️ الموقع (postUrl.ts → getPostUrl) يحسب السنة/الشهر/اليوم عبر
-    date.getFullYear()/getMonth()/getDate() — وهذي تُحسب بتوقيت متصفح
-    الزائر المحلي (توقيت اليمن UTC+3 عملياً). لازم نطابق نفس الحساب هنا
-    وإلا الرابط يشاور على يوم مختلف عمّا يتوقعه الموقع = "الخبر غير موجود"."""
-    dt = datetime.fromisoformat(created_at_iso)
+def build_canonical_url(slug: str, published_at_iso: str) -> str:
+    """يبني رابط المقال الرسمي من وقت النشر الفعلي بتوقيت اليمن UTC+3."""
+    dt = datetime.fromisoformat(published_at_iso)
     if dt.tzinfo is None:
         dt = dt.replace(tzinfo=timezone.utc)
     dt = dt.astimezone(YEMEN_TZ)
     return f"https://aljnoubvoice.com/{dt.year:04d}/{dt.month:02d}/{dt.day:02d}/{slug}"
 
 
-def request_google_indexing(urls: list) -> None:
-    """يستدعي دالة google-indexing بمشروع Supabase لطلب أرشفة الروابط فوراً
-    بجوجل — نفس الدالة المستخدمة بلوحة تحكم الموقع."""
-    if not GOOGLE_INDEXING_ENABLED or not urls:
-        return
-    try:
-        url = f"{SUPABASE_URL}/functions/v1/google-indexing"
-        r = requests.post(url, headers=sb_headers(),
-                           json={"urls": urls, "type": "URL_UPDATED"}, timeout=REQUEST_TIMEOUT)
-        if r.status_code == 200:
-            log.info(f"  📡 أُرسل للأرشفة (Google Indexing)")
-        else:
-            log.warning(f"  ⚠️  فشل إرسال الأرشفة [{r.status_code}]: {r.text[:200]}")
-    except requests.RequestException as e:
-        log.warning(f"  ⚠️  خطأ إرسال الأرشفة: {e}")
+def log_discovery_ready(urls: list) -> None:
+    """يسجل روابط جاهزة للاكتشاف عبر Sitemap وNews Sitemap وRSS.
+
+    لا يستخدم Google Indexing API للمقالات الإخبارية العادية.
+    """
+    for url in urls or []:
+        log.info("  📡 جاهز للاكتشاف عبر Sitemap وRSS: %s", url)
 
 # ══════════════════════════════════════════════════════════════════════
 #  🔑  مفاتيح Gemini ونماذجه (تدوير تلقائي عند نفاذ الحصة)
@@ -1981,7 +1968,7 @@ def check_and_notify_scheduled_posts() -> None:
         if not post_id:
             continue
         url = f"{SUPABASE_URL}/rest/v1/{TABLE_NAME}"
-        params = {"id": f"eq.{post_id}", "select": "id,status,slug,created_at"}
+        params = {"id": f"eq.{post_id}", "select": "id,status,slug,created_at,published_at"}
         try:
             r = requests.get(url, headers=sb_headers(), params=params, timeout=REQUEST_TIMEOUT)
         except requests.RequestException as e:
@@ -1995,7 +1982,7 @@ def check_and_notify_scheduled_posts() -> None:
 
         row = r.json()[0]
         if row.get("status") == "published":
-            canonical_url = build_canonical_url(row.get("slug") or entry.get("slug"), row["created_at"])
+            canonical_url = build_canonical_url(row.get("slug") or entry.get("slug"), row.get("published_at") or row["created_at"])
             if send_to_telegram(entry.get("title", ""), canonical_url):
                 log.info(f"  📢 نُشر فعلياً وأُرسل لتيليجرام الآن: {entry.get('title', '')[:60]}")
                 notified += 1
@@ -3865,6 +3852,7 @@ def main():
             "word_count": words,
             "reading_time": reading_time,
             "created_at": created_updated,
+            "published_at": created_updated if record_status == "published" else None,
             "updated_at": created_updated,
             "image_url": image_url,
             "thumbnail_image": image_url_square,
@@ -3906,7 +3894,7 @@ def main():
             seed_views(post_id)
 
             # رابط واحد صحيح يُستخدم لتيليجرام وللأرشفة معاً (بدل رابط /share الميت)
-            canonical_url = build_canonical_url(record["slug"], record["created_at"])
+            canonical_url = build_canonical_url(record["slug"], record.get("published_at") or record["created_at"])
 
             if record_status == "scheduled":
                 # ⏸️ وضع الجدولة: الخبر لسا status=scheduled وما نُشر فعلياً بالموقع بعد،
@@ -3922,7 +3910,7 @@ def main():
                 if send_to_telegram(record["title"], canonical_url):
                     log.info("  📢 أُرسل لتليجرام")
 
-                request_google_indexing([canonical_url])
+                log_discovery_ready([canonical_url])
         else:
             fail += 1
 

@@ -51,7 +51,7 @@ from janoub_news_bot import (
     seed_views,
     build_canonical_url,
     send_to_telegram,
-    request_google_indexing,
+    log_discovery_ready,
 )
 
 # ══════════════════════════════════════════════════════════════════════
@@ -226,6 +226,7 @@ def run():
             "word_count": words,
             "reading_time": reading_time,
             "created_at": item_date,
+            "published_at": item_date,
             "updated_at": item_date,
             "image_url": image_url,
             "thumbnail_image": image_url_square,
@@ -253,12 +254,12 @@ def run():
             log_published_title(record["title"], record["created_at"], embedding=it.get("_title_embedding"))
             save_blocked_link(it["link"])  # منع إعادة النشر مستقبلاً حتى لو حُذف الخبر من الموقع
             seed_views(post_id)
-            canonical_url = build_canonical_url(record["slug"], record["created_at"])
+            canonical_url = build_canonical_url(record["slug"], record.get("published_at") or record["created_at"])
 
             if send_to_telegram(record["title"], canonical_url):
                 log.info("  📢 أُرسل لتليجرام")
 
-            request_google_indexing([canonical_url])
+            log_discovery_ready([canonical_url])
         else:
             fail += 1
 
