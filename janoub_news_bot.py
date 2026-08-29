@@ -83,6 +83,10 @@ RSS_MASA_CATEGORY = "أخبار وتقارير"
 RSS_ADEN_TM_FULL_URL = "https://www.aden-tm.net/feed"
 RSS_ADEN_TM_FULL_CATEGORY = "أخبار وتقارير"
 
+# فيد وكالة الصحافة اليمنية — قسم المحافظات المحتلة، ويُنشر في أخبار وتقارير
+RSS_YPAGENCY_OCCUPIED_PROVINCES_URL = "https://www.ypagency.net/category/%d8%a7%d9%84%d9%85%d8%ad%d8%a7%d9%81%d8%b8%d8%a7%d8%aa-%d8%a7%d9%84%d9%85%d8%ad%d8%aa%d9%84%d8%a9/feed"
+RSS_YPAGENCY_OCCUPIED_PROVINCES_CATEGORY = "أخبار وتقارير"
+
 # كلمات محظورة — أي خبر من ملفات XML المحلية يحتوي إحداها (بالعنوان أو النص)
 # يُتجاوز بالكامل: لا يُرسل لـ Gemini، ولا تُعاد صياغته، ولا يُنشر.
 # لا تُطبَّق هذه الفلترة على مصدر RSS المساء (RSS_MASA_URL) — مسموح بدونها.
