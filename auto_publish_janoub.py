@@ -22,6 +22,8 @@ from janoub_news_bot import (
     RSS_MASA_CATEGORY,
     RSS_ADEN_TM_FULL_URL,
     RSS_ADEN_TM_FULL_CATEGORY,
+    RSS_ADEN_ALGHAD_SPORT_URL,
+    RSS_ADEN_ALGHAD_SPORT_CATEGORY,
     RSS_YPAGENCY_OCCUPIED_PROVINCES_URL,
     RSS_YPAGENCY_OCCUPIED_PROVINCES_CATEGORY,
     NO_REWRITE_CATEGORIES,
@@ -67,6 +69,7 @@ from janoub_news_bot import (
 
 SELECTED_FEEDS = {
     RSS_ADEN_TM_FULL_URL: RSS_ADEN_TM_FULL_CATEGORY,
+    RSS_ADEN_ALGHAD_SPORT_URL: RSS_ADEN_ALGHAD_SPORT_CATEGORY,
     RSS_YPAGENCY_OCCUPIED_PROVINCES_URL: RSS_YPAGENCY_OCCUPIED_PROVINCES_CATEGORY,
     # ⏸️ المساء برس مستبعد مؤقتاً — أعد هذا السطر لتفعيله من جديد:
     # RSS_MASA_URL: RSS_MASA_CATEGORY,
@@ -77,8 +80,6 @@ SELECTED_FEEDS = {
 EXCLUDED_AUTO_CATEGORIES = {
     "آراء واتجاهات",
     "أسعار العملات والذهب",
-    # ⏸️ رياضة مستبعد مؤقتاً — احذف هذا السطر لإعادة تفعيله من جديد:
-    "رياضة",
 }
 
 # 🚫 كلمات مفتاحية تستبعد الخبر تلقائياً لو ظهرت بعنوانه أو نصه، بمعزل عن
