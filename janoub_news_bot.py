@@ -1033,6 +1033,20 @@ STOP_REGEX_PATTERNS = [
 def _hits_stop_regex(text: str) -> bool:
     return any(p.match(text.strip()) for p in STOP_REGEX_PATTERNS)
 
+
+def _is_related_article_block(el: Tag) -> bool:
+    """يوقف الاستخراج عند عناوين الأخبار المقترحة التي تضعها بعض الصفحات
+    بعد نهاية متن الخبر داخل عناصر title أو روابط عناوين المقالات."""
+    classes = set(el.get("class") or [])
+    if "title" in classes and el.find("a") is not None:
+        return True
+    link = el.find("a", class_=lambda value: value and any(
+        c in (value if isinstance(value, list) else str(value).split())
+        for c in ("post-title", "post-url")
+    ))
+    return link is not None
+
+
 # علامات توقف: أول عنصر بالكتلة الفائزة نصه يطابقها = نهاية المتن الفعلي
 STOP_MARKERS = [
     "مواضيع قد تهمك",
@@ -1052,12 +1066,14 @@ STOP_MARKERS = [
 ]
 
 
-def _extract_by_doc_order(h1: Optional[Tag], soup: BeautifulSoup) -> list[str]:
+def _extract_by_doc_order(h1: Optional[Tag], soup: BeautifulSoup, stop_related: bool = False) -> list[str]:
     """يمشي بترتيب ظهور الصفحة بعد العنوان ويلقط كل <p>/<h2-4>، متوقفاً عند
     أول علامة توقف (تعليقات/مقالات ذات صلة/إلخ)."""
     start_node = h1 or soup.body or soup
     paragraphs = []
     for el in start_node.find_all_next(["p", "h2", "h3", "h4"]):
+        if stop_related and _is_related_article_block(el):
+            break
         text = _clean_text(el.get_text(" ", strip=True))
         if not text:
             continue
@@ -1285,7 +1301,7 @@ def _detect_site_category(h1: Optional[Tag]) -> Optional[str]:
     return None
 
 
-def extract_article(url: str) -> Optional[dict]:
+def extract_article(url: str, stop_related: bool = False) -> Optional[dict]:
     try:
         resp = fetch_with_bypass(url, headers=ARTICLE_HEADERS, timeout=ARTICLE_REQUEST_TIMEOUT)
         resp.raise_for_status()
@@ -1324,7 +1340,7 @@ def extract_article(url: str) -> Optional[dict]:
         for t in soup.find_all(tag_name):
             t.decompose()
 
-    doc_order_paragraphs = _extract_by_doc_order(h1, soup)
+    doc_order_paragraphs = _extract_by_doc_order(h1, soup, stop_related=stop_related)
     total_len = sum(len(p) for p in doc_order_paragraphs)
     if ARTICLE_DEBUG:
         print(f"  🔧 نتيجة الاستخراج بترتيب ظهور الصفحة: {len(doc_order_paragraphs)} "
@@ -1356,6 +1372,10 @@ def extract_article(url: str) -> Optional[dict]:
             print(f"  🔧 عدد المجموعات (parents) المرشحة: {len(groups)}")
 
         for leaf in best["leaves"]:
+            if stop_related and _is_related_article_block(leaf):
+                if ARTICLE_DEBUG:
+                    print("  ⛔ توقف عند كتلة خبر مقترح")
+                break
             text = _clean_text(leaf.get_text(" ", strip=True))
             if _hits_stop_regex(text):
                 if ARTICLE_DEBUG:
@@ -1439,7 +1459,10 @@ def apply_full_extraction(items: list[dict]) -> None:
     total = len(items)
     for idx, it in enumerate(items, start=1):
         log.info(f"  🧲 [{idx}/{total}] استخراج الخبر الكامل: {it['link'][:80]}")
-        result = extract_article(it["link"])
+        result = extract_article(
+            it["link"],
+            stop_related=it.get("source_feed") == RSS_YPAGENCY_OCCUPIED_PROVINCES_URL,
+        )
         body_ok = bool(result and result.get("body") and len(result["body"]) >= MIN_ACCEPTABLE_LOCAL_LEN)
 
         if body_ok:
