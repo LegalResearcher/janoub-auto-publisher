@@ -69,7 +69,8 @@ from janoub_news_bot import (
 
 SELECTED_FEEDS = {
     RSS_ADEN_TM_FULL_URL: RSS_ADEN_TM_FULL_CATEGORY,
-    RSS_ADEN_ALGHAD_SPORT_URL: RSS_ADEN_ALGHAD_SPORT_CATEGORY,
+    # ⏸️ فيد الرياضة متوقف مؤقتاً — أزل التعليق عن السطر لإعادة تفعيله:
+    # RSS_ADEN_ALGHAD_SPORT_URL: RSS_ADEN_ALGHAD_SPORT_CATEGORY,
     RSS_YPAGENCY_OCCUPIED_PROVINCES_URL: RSS_YPAGENCY_OCCUPIED_PROVINCES_CATEGORY,
     # ⏸️ المساء برس مستبعد مؤقتاً — أعد هذا السطر لتفعيله من جديد:
     # RSS_MASA_URL: RSS_MASA_CATEGORY,
