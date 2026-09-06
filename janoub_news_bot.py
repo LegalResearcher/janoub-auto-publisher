@@ -75,6 +75,7 @@ RSS_FEEDS = list(RSS_FEED_CATEGORIES.keys())
 # (يُنسب تلقائياً لقسم "أخبار وتقارير" عند السحب منه)
 RSS_MASA_URL = "https://masa-press.net/category/اهم-الاخبار/feed/"
 RSS_MASA_CATEGORY = "أخبار وتقارير"
+MASA_ENABLED = False  # موقوف مؤقتاً
 
 # رابط RSS الحي لموقع عدن تايم (مباشر من الإنترنت، وليس ملف XML محلي ثابت) —
 # يُستخدم حصراً بوضع "1" (استخراج الخبر كاملاً): البوت يسحب روابط الأخبار من
@@ -3683,12 +3684,11 @@ def main():
     if extraction_mode == "2":
         selected_feeds = dict(RSS_FEED_CATEGORIES)
     elif extraction_mode == "3":
-        selected_feeds = {RSS_MASA_URL: RSS_MASA_CATEGORY}
+        selected_feeds = {RSS_MASA_URL: RSS_MASA_CATEGORY} if MASA_ENABLED else {}
     else:  # "1" — استخراج كامل: فيد عدن تايم الحي + فيد المساء برس معاً
-        selected_feeds = {
-            RSS_ADEN_TM_FULL_URL: RSS_ADEN_TM_FULL_CATEGORY,
-            RSS_MASA_URL: RSS_MASA_CATEGORY,
-        }
+        selected_feeds = {RSS_ADEN_TM_FULL_URL: RSS_ADEN_TM_FULL_CATEGORY}
+        if MASA_ENABLED:
+            selected_feeds[RSS_MASA_URL] = RSS_MASA_CATEGORY
 
     if RSS_MASA_URL in selected_feeds:
         masa_category = choose_category_name()
