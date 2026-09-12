@@ -113,11 +113,14 @@ NAQABI_RSS_BOILERPLATE_ALT = (
 def _is_blocked_auto_topic(it: dict) -> bool:
     text = f"{it.get('title', '')} {it.get('raw_body', '')}"
     if it.get("source_feed") == RSS_ALNAQABI_FULL_URL:
-        # تجاهل ترويسة المصدر فقط؛ تبقى الكلمات المحظورة في عنوان/متن الخبر
-        # الحقيقي فعّالة كما هي لباقي المصادر.
+        # تجاهل ترويسة المصدر، مع السماح بكلمة «عاجل» في عنوان/متن الخبر
+        # الحقيقي، كما في التشغيل التلقائي لشمسان نيوز.
         text = text.replace(NAQABI_RSS_BOILERPLATE, "")
         text = text.replace(NAQABI_RSS_BOILERPLATE_ALT, "")
-    return any(kw in text for kw in BLOCKED_AUTO_TOPIC_KEYWORDS)
+        keywords = [kw for kw in BLOCKED_AUTO_TOPIC_KEYWORDS if kw != "عاجل"]
+    else:
+        keywords = BLOCKED_AUTO_TOPIC_KEYWORDS
+    return any(kw in text for kw in keywords)
 
 
 def _log_source_counts(label: str, items: list[dict]) -> None:
