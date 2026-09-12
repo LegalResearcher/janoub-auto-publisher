@@ -106,6 +106,16 @@ def _is_blocked_auto_topic(it: dict) -> bool:
     return any(kw in text for kw in BLOCKED_AUTO_TOPIC_KEYWORDS)
 
 
+def _log_source_counts(label: str, items: list[dict]) -> None:
+    """يسجل عدد العناصر لكل فيد حتى يظهر موضع استبعاد أخبار أي مصدر بوضوح."""
+    counts: dict[str, int] = {}
+    for it in items:
+        source = it.get("source_feed") or "(مصدر غير معروف)"
+        counts[source] = counts.get(source, 0) + 1
+    details = " | ".join(f"{source}: {count}" for source, count in counts.items()) or "لا شيء"
+    log.info(f"📊 {label} حسب المصدر: {details}")
+
+
 def run():
     log.info("═" * 60)
     log.info("  📰  الجنوب فويس — تشغيل تلقائي (عدن تايم + المساء برس)")
@@ -119,16 +129,20 @@ def run():
     recent_published = get_recent_published_titles(hours=24)
 
     items = collect_recent_items(SELECTED_FEEDS)
+    _log_source_counts("بعد سحب RSS وقبل فحص الرابط", items)
     new_items = [
         it for it in items
         if it["link"] not in existing_urls and it["link"] not in blocked_links
     ]
+    _log_source_counts("بعد استبعاد الروابط المنشورة/المحظورة", new_items)
     new_items = remove_duplicate_news(new_items, history_items=recent_published)
+    _log_source_counts("بعد استبعاد الأخبار المتشابهة", new_items)
 
     blocked_topic_count = sum(1 for it in new_items if _is_blocked_auto_topic(it))
     if blocked_topic_count:
         new_items = [it for it in new_items if not _is_blocked_auto_topic(it)]
         log.info(f"🚫 استُبعد {blocked_topic_count} خبر (يحتوي كلمة ممنوعة: عاجل/طقس/كهرباء/أذان/ذهب/صرف).")
+    _log_source_counts("بعد فلتر الكلمات المحظورة التلقائي", new_items)
 
     log.info("─" * 60)
     log.info(f"✅ إجمالي الأخبار الجديدة المؤهلة للنشر: {len(new_items)}")
@@ -144,6 +158,7 @@ def run():
     if excluded_count:
         new_items = [it for it in new_items if not it.get("_excluded")]
         log.info(f"🚫 استُبعد {excluded_count} خبر (قسم غير معروف/تعذّر اكتشافه من صفحته).")
+    _log_source_counts("بعد استخراج النص الكامل واستبعاد الأقسام غير المعروفة", new_items)
 
     # فلتر الأقسام المستبعدة كلياً من النشر التلقائي — بعد الاستخراج الكامل
     # مباشرة، لأن قسم أخبار عدن تايم يُصحَّح تلقائياً بهذه المرحلة تحديداً
@@ -154,6 +169,7 @@ def run():
             f"🚫 استُبعد {category_excluded_count} خبر (قسم مستبعد من النشر التلقائي: "
             "آراء واتجاهات/أسعار العملات والذهب)."
         )
+    _log_source_counts("بعد استبعاد الأقسام غير المسموحة", new_items)
 
     if not new_items:
         log.info("لا يوجد أخبار جديدة حالياً بعد الاستبعاد.")
