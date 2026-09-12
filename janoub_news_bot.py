@@ -88,8 +88,13 @@ RSS_ADEN_ALGHAD_SPORT_URL = "https://www.adngad.net/feedsec/12"
 RSS_ADEN_ALGHAD_SPORT_CATEGORY = "رياضة"
 
 # فيد وكالة الصحافة اليمنية — قسم المحافظات المحتلة، ويُنشر في أخبار وتقارير
-RSS_YPAGENCY_OCCUPIED_PROVINCES_URL = "https://www.ypagency.net/category/%d8%a7%d9%84%d9%85%d8%ad%d8%a7%d9%81%d8%b8%d8%a7%d8%aa-%d8%a7%d9%84%d9%85%d8%ad%d8%aa%d9%84%d8%a9/feed"
+RSS_YPAGENCY_OCCUPIED_PROVINCES_URL = "https://www.ypagency.net/category/%d8%a7%d9%84%d9%85%d8%ad%d8%aa%d9%84%d8%a7%d8%aa-%d8%a7%d9%84%d9%85%d8%ad%d8%aa%d9%84%d8%a9/feed"
 RSS_YPAGENCY_OCCUPIED_PROVINCES_CATEGORY = "أخبار وتقارير"
+
+# فيد النقابي الجنوبي الحي — يُفتح كل رابط لاستخراج النص الكامل، ويُنشر
+# تلقائياً في قسم أخبار وتقارير بنفس مسار فيد عدن تايم.
+RSS_ALNAQABI_FULL_URL = "https://alnqabialjanubi.com/feed"
+RSS_ALNAQABI_FULL_CATEGORY = "أخبار وتقارير"
 
 # كلمات محظورة — أي خبر من ملفات XML المحلية يحتوي إحداها (بالعنوان أو النص)
 # يُتجاوز بالكامل: لا يُرسل لـ Gemini، ولا تُعاد صياغته، ولا يُنشر.
@@ -937,7 +942,7 @@ BLOCKED_KEYWORDS_CATEGORIES = {"أخبار عدن"}
 # النظر عن قسمها — تحديداً فيد عدن تايم الحي المستخدم بوضع "1" (استخراج
 # الخبر كاملاً). أي مصدر آخر غير مذكور هنا أو بـBLOCKED_KEYWORDS_CATEGORIES
 # (مثل RSS المساء) يبقى بدون فلترة تماماً.
-BLOCKED_KEYWORDS_SOURCES = {RSS_ADEN_TM_FULL_URL}
+BLOCKED_KEYWORDS_SOURCES = {RSS_ADEN_TM_FULL_URL, RSS_ALNAQABI_FULL_URL}
 
 
 def collect_recent_items(feed_categories: Optional[dict] = None) -> list[dict]:
