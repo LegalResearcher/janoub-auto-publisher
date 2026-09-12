@@ -2042,11 +2042,19 @@ def sb_insert(record: dict) -> Optional[str]:
     ‏?select=id يقيّد الصف المُعاد لعمود id فقط بدل السجل كاملاً (شاملاً
     content الكامل) — نفس الـ id بالضبط، لكن بدون إعادة إرسال نص المقال كله
     عبر الشبكة فور إرساله، توفيراً على Database Egress بكل عملية نشر."""
-    url = f"{SUPABASE_URL}/rest/v1/{TABLE_NAME}?select=id"
+    # الإدخال ذري بالنسبة إلى source_url: فحص الرابط مسبقاً في run() ليس
+    # كافياً إذا بدأ تشغيلان متقاربان قبل أن يرى أيٌّ منهما إدخال الآخر.
+    # يعتمد هذا على الفهرس UNIQUE على posts(source_url)، والموجود في
+    # migration/20260912_prevent_duplicate_posts.sql.
+    url = f"{SUPABASE_URL}/rest/v1/{TABLE_NAME}?on_conflict=source_url&select=id"
+    insert_headers = {
+        **sb_headers(),
+        "Prefer": "resolution=ignore-duplicates, return=representation",
+    }
     delay = 3
     for attempt in range(1, MAX_RETRIES + 1):
         try:
-            r = requests.post(url, headers={**sb_headers(), "Prefer": "return=representation"},
+            r = requests.post(url, headers=insert_headers,
                                json=record, timeout=REQUEST_TIMEOUT)
             if r.status_code in (200, 201):
                 try:
