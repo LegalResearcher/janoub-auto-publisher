@@ -70,13 +70,14 @@ from janoub_news_bot import (
 # ══════════════════════════════════════════════════════════════════════
 
 SELECTED_FEEDS = {
-    RSS_ADEN_TM_FULL_URL: RSS_ADEN_TM_FULL_CATEGORY,
+    # ⏸️ عدن تايم متوقف مؤقتًا — أزل التعليق عن السطر لإعادة تفعيله:
+    # RSS_ADEN_TM_FULL_URL: RSS_ADEN_TM_FULL_CATEGORY,
     RSS_ALNAQABI_FULL_URL: RSS_ALNAQABI_FULL_CATEGORY,
     # ⏸️ فيد الرياضة متوقف مؤقتاً — أزل التعليق عن السطر لإعادة تفعيله:
     # RSS_ADEN_ALGHAD_SPORT_URL: RSS_ADEN_ALGHAD_SPORT_CATEGORY,
     RSS_YPAGENCY_OCCUPIED_PROVINCES_URL: RSS_YPAGENCY_OCCUPIED_PROVINCES_CATEGORY,
-    # ⏸️ المساء برس مستبعد مؤقتاً — أعد هذا السطر لتفعيله من جديد:
-    RSS_MASA_URL: RSS_MASA_CATEGORY,
+    # ⏸️ المساء برس متوقف مؤقتًا — أزل التعليق عن السطر لإعادة تفعيله:
+    # RSS_MASA_URL: RSS_MASA_CATEGORY,
 }
 
 # 🚫 أقسام مستبعدة كلياً من النشر التلقائي (تبقى متاحة بالوضع التفاعلي
