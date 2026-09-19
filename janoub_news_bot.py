@@ -88,7 +88,9 @@ RSS_ADEN_ALGHAD_SPORT_URL = "https://www.adngad.net/feedsec/12"
 RSS_ADEN_ALGHAD_SPORT_CATEGORY = "رياضة"
 
 # فيد وكالة الصحافة اليمنية — قسم المحافظات المحتلة، ويُنشر في أخبار وتقارير
-RSS_YPAGENCY_OCCUPIED_PROVINCES_URL = "https://www.ypagency.net/category/%d8%a7%d9%84%d9%85%d8%ad%d8%aa%d9%84%d8%a7%d8%aa-%d8%a7%d9%84%d9%85%d8%ad%d8%aa%d9%84%d8%a9/feed"
+# بنفس مسار فيد النقابي: استخراج كامل من صفحة الخبر، ومن دون إضافته إلى
+# قوائم الكلمات المحظورة.
+RSS_YPAGENCY_OCCUPIED_PROVINCES_URL = "https://www.ypagency.net/category/%d8%a7%d9%84%d9%85%d8%ad%d8%a7%d9%81%d8%b8%d8%a7%d8%aa-%d8%a7%d9%84%d9%85%d8%ad%d8%aa%d9%84%d8%a9/feed"
 RSS_YPAGENCY_OCCUPIED_PROVINCES_CATEGORY = "أخبار وتقارير"
 
 # فيد النقابي الجنوبي الحي — نفس فيد التصنيف المستخدم في شمسان نيوز؛
