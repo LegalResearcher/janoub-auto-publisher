@@ -98,16 +98,6 @@ RSS_YPAGENCY_OCCUPIED_PROVINCES_CATEGORY = "أخبار وتقارير"
 RSS_ALNAQABI_FULL_URL = "https://alnqabialjanubi.com/archives/category/newscat/feed"
 RSS_ALNAQABI_FULL_CATEGORY = "أخبار وتقارير"
 
-# فيد سلمى المشهد الحي — نفس منطق فيد النقابي: يُفتح كل رابط خبر
-# لاستخراج النص الكامل من صفحة الخبر، ويُنشر تلقائياً في أخبار وتقارير.
-RSS_SALMASHHAD_FULL_URL = "https://www.salmashhad.com/feed/"
-RSS_SALMASHHAD_FULL_CATEGORY = "أخبار وتقارير"
-
-# موقع سلمى المشهد لا يستجيب أحياناً من GitHub Actions. لا نستخدم معه
-# سلسلة البروكسيات الطويلة، حتى لا يحجز فيد واحد تشغيل الناشر حتى مهلة
-# GitHub Actions (10 دقائق) ويمنع نشر بقية المصادر.
-RSS_DIRECT_ONLY_TIMEOUT = (8, 15)
-
 # كلمات محظورة — أي خبر من ملفات XML المحلية يحتوي إحداها (بالعنوان أو النص)
 # يُتجاوز بالكامل: لا يُرسل لـ Gemini، ولا تُعاد صياغته، ولا يُنشر.
 # لا تُطبَّق هذه الفلترة على مصدر RSS المساء (RSS_MASA_URL) — مسموح بدونها.
@@ -822,19 +812,11 @@ def fetch_feed(url: str, category: str) -> list[dict]:
     # يدعم رابط إنترنت (http/https) أو مسار ملف XML محلي على الجهاز
     if url.startswith("http://") or url.startswith("https://"):
         try:
-            if url == RSS_SALMASHHAD_FULL_URL:
-                resp = requests.get(
-                    url,
-                    timeout=RSS_DIRECT_ONLY_TIMEOUT,
-                    headers={"User-Agent": "Mozilla/5.0"},
-                )
-                resp.raise_for_status()
-            else:
-                resp = fetch_with_bypass(
-                    url,
-                    timeout=REQUEST_TIMEOUT,
-                    headers={"User-Agent": "Mozilla/5.0"},
-                )
+            resp = fetch_with_bypass(
+                url,
+                timeout=REQUEST_TIMEOUT,
+                headers={"User-Agent": "Mozilla/5.0"},
+            )
             raw_content = resp.content
         except requests.RequestException as e:
             log.warning(f"  ⚠️  فشل سحب {url}: {e}")
