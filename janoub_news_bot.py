@@ -98,6 +98,11 @@ RSS_YPAGENCY_OCCUPIED_PROVINCES_CATEGORY = "أخبار وتقارير"
 RSS_ALNAQABI_FULL_URL = "https://alnqabialjanubi.com/archives/category/newscat/feed"
 RSS_ALNAQABI_FULL_CATEGORY = "أخبار وتقارير"
 
+# فيد سلمى المشهد الحي — نفس منطق فيد النقابي: يُفتح كل رابط خبر
+# لاستخراج النص الكامل من صفحة الخبر، ويُنشر تلقائياً في أخبار وتقارير.
+RSS_SALMASHHAD_FULL_URL = "https://www.salmashhad.com/feed/"
+RSS_SALMASHHAD_FULL_CATEGORY = "أخبار وتقارير"
+
 # كلمات محظورة — أي خبر من ملفات XML المحلية يحتوي إحداها (بالعنوان أو النص)
 # يُتجاوز بالكامل: لا يُرسل لـ Gemini، ولا تُعاد صياغته، ولا يُنشر.
 # لا تُطبَّق هذه الفلترة على مصدر RSS المساء (RSS_MASA_URL) — مسموح بدونها.
