@@ -3328,6 +3328,16 @@ def rewrite_title_only(title: str, body: str) -> Optional[str]:
 #  🧩  أدوات مساعدة
 # ══════════════════════════════════════════════════════════════════════
 
+def normalize_model_text(text: str) -> str:
+    """يحوّل فواصل الأسطر escaped التي قد يعيدها النموذج إلى فواصل حقيقية.
+    بعض استجابات JSON تُفك إلى \n حقيقي، بينما قد يعيد النموذج أحيانًا
+    "\\n\\n" كنص حرفي؛ نعالج الحالتين قبل التخزين والعرض."""
+    text = str(text or "")
+    text = re.sub(r"\\+r?n", "\n", text)
+    text = re.sub(r"\\+u000a", "\n", text, flags=re.IGNORECASE)
+    text = re.sub(r"\\+u000d", "\n", text, flags=re.IGNORECASE)
+    return text.strip()
+
 def format_content_paragraphs(text: str) -> str:
     """ينظف فواصل الأسطر escaped ثم يفصل كل جملة بعد نقطة إلى HTML <p> مستقلة.
     الموقع يعرض content كـ HTML مباشرة (dangerouslySetInnerHTML)."""
