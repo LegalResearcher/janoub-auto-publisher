@@ -471,50 +471,75 @@ def log_discovery_ready(urls: list) -> None:
 #  🔑  مفاتيح Gemini ونماذجه (تدوير تلقائي عند نفاذ الحصة)
 # ══════════════════════════════════════════════════════════════════════
 
-# تُقرأ من متغير بيئة GEMINI_API_KEYS بصيغة مفاتيح مفصولة بفواصل
-GEMINI_API_KEYS = [
-    k.strip() for k in os.environ.get("GEMINI_API_KEYS", "").split(",") if k.strip()
-]
+# ══════════════════════════════════════════════════════════════════════
+#  🔑 مفاتيح Gemini — تُقرأ من GEMINI_API_KEYS (مفصولة بفواصل)، أو من
+#  GEMINI_API_KEY_GROUPS عند الحاجة إلى مجموعات متعددة (المجموعات مفصولة
+#  بفاصلة منقوطة، ومفاتيح كل مجموعة مفصولة بفواصل).
+# ══════════════════════════════════════════════════════════════════════
+GEMINI_API_KEYS = [k.strip() for k in os.environ.get("GEMINI_API_KEYS", "").split(",") if k.strip()]
+
+
+def _load_gemini_key_groups() -> list[list[str]]:
+    grouped_raw = os.environ.get("GEMINI_API_KEY_GROUPS", "").strip()
+    if grouped_raw:
+        groups = [
+            [key.strip() for key in group.split(",") if key.strip()]
+            for group in grouped_raw.split(";")
+        ]
+        return [group for group in groups if group]
+    return [GEMINI_API_KEYS] if GEMINI_API_KEYS else []
+
+
+KEY_GROUPS = _load_gemini_key_groups()
 
 # ══════════════════════════════════════════════════════════════════════
-#  🔑 منطق تدوير المفاتيح/النماذج (تدرّج عبر عدة نماذج بالترتيب، وليس
-#  مرحلتين فقط كما كان سابقاً):
-#
-#  يبدأ بالمفتاح الأول + أول نموذج في MODEL_CASCADE. عند انتهاء حصة
-#  مفتاح معيّن (أو 429/404)، ينتقل للمفتاح التالي **بنفس النموذج
-#  الحالي** — يستمر كذلك حتى آخر مفتاح.
-#
-#  عند استنفاد النموذج الحالي على كل المفاتيح، ينتقل للنموذج التالي في
-#  MODEL_CASCADE ويرجع للمفتاح الأول، ويكرر نفس المنطق (يتنقل بين كل
-#  المفاتيح) بالنموذج الجديد. يستمر هكذا عبر كل نماذج القائمة بالترتيب.
-#  لو استُنفدت كل النماذج على كل المفاتيح، تُرفع الاستثناء نهائياً (لا
-#  مزيد من الخيارات لهذا التشغيل).
-#
-#  بداية كل تشغيل جديد للسكريبت (تشغيل تالٍ عبر cron مثلاً) تبدأ دائماً
-#  من الصفر (المفتاح الأول + أول نموذج في MODEL_CASCADE) تلقائياً، لأن
-#  الحالة (_current_key_idx وَ_current_model_idx) متغيرات وحدة عادية
-#  تُهيَّأ من جديد مع كل تشغيل مستقل للعملية (process)، ولا تُحفظ بين
-#  التشغيلات.
+#  🔑 منطق تدوير المفاتيح/النماذج المطابق لمنطق حصاد اليوم:
+#  النهار: النماذج بالترتيب لكل مفتاح، ثم المفتاح التالي.
+#  الليل: النماذج الليلية لكل مفتاح بالترتيب العكسي، ثم المجموعة السابقة.
 # ══════════════════════════════════════════════════════════════════════
+PRIMARY_MODEL = "gemini-3.6-flash"
+FALLBACK_MODEL = "gemini-3.5-flash"
 
-MODEL_CASCADE = [
-    "gemini-3.6-flash",
-    "gemini-3.5-flash",
+DAY_MODEL_CASCADE = [
+    PRIMARY_MODEL,
+    FALLBACK_MODEL,
     "gemini-3.7-flash",
     "gemini-3.5-flash-lite",
     "gemini-3.1-flash-lite",
 ]
 
-_current_key_idx = 0
-_current_model_idx = 0
+NIGHT_MODEL_CASCADE = [
+    "gemini-3.1-flash-lite",
+    "gemini-3.5-flash-lite",
+]
+
+
+def is_night_mode(now_yemen: Optional[datetime] = None) -> bool:
+    """الفترة الليلية: من 00:00 حتى 13:59 بتوقيت اليمن."""
+    now_yemen = now_yemen or datetime.now(YEMEN_TZ)
+    if now_yemen.tzinfo is not None:
+        now_yemen = now_yemen.astimezone(YEMEN_TZ)
+    return now_yemen.hour < 14
+
+
+_now_yemen = datetime.now(YEMEN_TZ)
+NIGHT_MODE = is_night_mode(_now_yemen)
+MODEL_CASCADE = NIGHT_MODEL_CASCADE if NIGHT_MODE else DAY_MODEL_CASCADE
+_current_group_idx = len(KEY_GROUPS) - 1 if KEY_GROUPS and NIGHT_MODE else 0
+_current_key_idx = (
+    len(KEY_GROUPS[_current_group_idx]) - 1
+    if KEY_GROUPS and NIGHT_MODE
+    else 0
+)
+_model_stage_idx = 0
 
 
 def current_model() -> str:
-    return MODEL_CASCADE[_current_model_idx]
+    return MODEL_CASCADE[_model_stage_idx]
 
 
 def current_key() -> str:
-    return GEMINI_API_KEYS[_current_key_idx]
+    return KEY_GROUPS[_current_group_idx][_current_key_idx]
 
 
 def model_url() -> str:
@@ -3243,49 +3268,88 @@ def call_gemini(prompt_text: str, schema: dict = None) -> str:
 
 
 def call_with_rotation(prompt_text: str, schema: dict = None) -> str:
-    global _current_key_idx, _current_model_idx
+    global _current_group_idx, _current_key_idx, _model_stage_idx
     while True:
+        current_group = KEY_GROUPS[_current_group_idx]
         try:
             return call_gemini(prompt_text, schema)
         except (DailyQuotaExceeded, ModelUnavailable, KeyForbidden) as e:
+            group_label = f"مجموعة {_current_group_idx + 1}/{len(KEY_GROUPS)}"
             if isinstance(e, ModelUnavailable):
                 log.warning(
                     f"  ⚠️  النموذج غير متاح لهذا المفتاح (404): {current_model()} "
-                    f"[مفتاح {_current_key_idx + 1}/{len(GEMINI_API_KEYS)}]"
+                    f"[{group_label} - مفتاح {_current_key_idx + 1}/{len(current_group)}]"
                 )
             elif isinstance(e, KeyForbidden):
                 log.warning(
-                    f"  🚫 المفتاح مرفوض/محظور لهذا النموذج (401/403): {current_model()} "
-                    f"[مفتاح {_current_key_idx + 1}/{len(GEMINI_API_KEYS)}]"
+                    f"  🚫 المفتاح مرفوض (401/403): {current_model()} "
+                    f"[{group_label} - مفتاح {_current_key_idx + 1}/{len(current_group)}]"
                 )
             else:
                 log.warning(
                     f"  🛑 انتهت الحصة اليومية ({current_model()}) "
-                    f"[مفتاح {_current_key_idx + 1}/{len(GEMINI_API_KEYS)}]"
+                    f"[{group_label} - مفتاح {_current_key_idx + 1}/{len(current_group)}]"
                 )
 
-            if _current_key_idx + 1 < len(GEMINI_API_KEYS):
-                # لسه فيه مفاتيح تانية لنفس النموذج الحالي — ننتقل للمفتاح التالي
-                _current_key_idx += 1
-                log.info(f"  🔑 مفتاح جديد [{_current_key_idx + 1}/{len(GEMINI_API_KEYS)}] | {current_model()}")
-                continue
+            if NIGHT_MODE:
+                if _model_stage_idx + 1 < len(MODEL_CASCADE):
+                    _model_stage_idx += 1
+                    log.warning(
+                        f"  🌙 الانتقال إلى النموذج الليلي التالي {current_model()} "
+                        f"للمفتاح نفسه ({_model_stage_idx + 1}/{len(MODEL_CASCADE)})."
+                    )
+                    continue
+                if _current_key_idx > 0:
+                    _current_key_idx -= 1
+                    _model_stage_idx = 0
+                    log.warning(
+                        f"  🌙 استُنفدت نماذج المفتاح الحالي — الانتقال إلى "
+                        f"المفتاح {_current_key_idx + 1}/{len(current_group)} "
+                        f"بدءاً من {current_model()}."
+                    )
+                    continue
+                if _current_group_idx > 0:
+                    _current_group_idx -= 1
+                    _current_key_idx = len(KEY_GROUPS[_current_group_idx]) - 1
+                    _model_stage_idx = 0
+                    log.warning(
+                        f"  🌙 استُنفدت المجموعة الحالية — الانتقال إلى "
+                        f"المجموعة {_current_group_idx + 1}/{len(KEY_GROUPS)} "
+                        f"من آخر مفتاح وبدءاً من {current_model()}."
+                    )
+                    continue
+                log.error("  ❌ استُنفدت كل مجموعات ومفاتيح ونماذج الفترة الليلية بالكامل.")
+                raise
 
-            if _current_model_idx + 1 < len(MODEL_CASCADE):
-                # استُنفدت حصة النموذج الحالي على كل المفاتيح — ننتقل للنموذج
-                # التالي في MODEL_CASCADE، نبدأ من المفتاح الأول من جديد.
-                exhausted_model = current_model()
-                _current_model_idx += 1
-                _current_key_idx = 0
+            if _model_stage_idx + 1 < len(MODEL_CASCADE):
+                _model_stage_idx += 1
                 log.warning(
-                    f"  🔄 استُنفدت حصة {exhausted_model} على كل المفاتيح — "
-                    f"التبديل إلى {current_model()} بدءاً من المفتاح الأول "
-                    f"[نموذج {_current_model_idx + 1}/{len(MODEL_CASCADE)}]."
+                    f"  🔄 الانتقال إلى النموذج النهاري التالي {current_model()} "
+                    f"للمفتاح نفسه ({_model_stage_idx + 1}/{len(MODEL_CASCADE)})."
                 )
                 continue
-
-            # استُنفدت كل النماذج في MODEL_CASCADE على كل المفاتيح — لا مزيد
-            # من الخيارات لهذا التشغيل، تُرفع الاستثناء للمتصل.
-            log.error(f"  ❌ استُنفدت حصة {current_model()} أيضاً على كل المفاتيح — لا مزيد من الخيارات في MODEL_CASCADE.")
+            if _current_key_idx + 1 < len(current_group):
+                _current_key_idx += 1
+                _model_stage_idx = 0
+                log.warning(
+                    f"  🔑 استُنفدت نماذج المفتاح السابق — الانتقال إلى "
+                    f"المفتاح {_current_key_idx + 1}/{len(current_group)} "
+                    f"بدءاً من {current_model()}."
+                )
+                continue
+            if _current_group_idx + 1 < len(KEY_GROUPS):
+                _current_group_idx += 1
+                _current_key_idx = 0
+                _model_stage_idx = 0
+                log.warning(
+                    f"  🔑 استُنفدت المجموعة الحالية — الانتقال إلى "
+                    f"المجموعة {_current_group_idx + 1}/{len(KEY_GROUPS)} "
+                    f"من أول مفتاح وبدءاً من {current_model()}."
+                )
+                continue
+            log.error(
+                f"  ❌ استُنفدت كل مجموعات المفاتيح وكل النماذج — لا مزيد من الخيارات."
+            )
             raise
 
 
