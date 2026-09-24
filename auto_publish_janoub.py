@@ -70,8 +70,7 @@ from janoub_news_bot import (
 # ══════════════════════════════════════════════════════════════════════
 
 SELECTED_FEEDS = {
-    # ⏸️ عدن تايم متوقف مؤقتًا — أزل التعليق عن السطر لإعادة تفعيله:
-    # RSS_ADEN_TM_FULL_URL: RSS_ADEN_TM_FULL_CATEGORY,
+    RSS_ADEN_TM_FULL_URL: RSS_ADEN_TM_FULL_CATEGORY,
     RSS_ALNAQABI_FULL_URL: RSS_ALNAQABI_FULL_CATEGORY,
     # ⏸️ فيد الرياضة متوقف مؤقتاً — أزل التعليق عن السطر لإعادة تفعيله:
     # RSS_ADEN_ALGHAD_SPORT_URL: RSS_ADEN_ALGHAD_SPORT_CATEGORY,
