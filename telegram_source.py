@@ -6,6 +6,7 @@ not send messages and never stores the bot token in the repository.
 from __future__ import annotations
 
 import os
+import logging
 from datetime import datetime, timezone
 from typing import Any
 
@@ -15,10 +16,19 @@ CURSOR_KEY = "alymenet_private_channel"
 CURSOR_TABLE = "bot_source_cursors"
 REQUEST_TIMEOUT = 30
 MAX_TELEGRAM_DOWNLOAD_BYTES = 20 * 1024 * 1024
+logger = logging.getLogger(__name__)
 
 
 class TelegramFileTooLargeError(RuntimeError):
     """The hosted Telegram Bot API cannot download this file size."""
+
+
+class TelegramAPIError(RuntimeError):
+    def __init__(self, method: str, code: int, description: str):
+        self.method = method
+        self.code = code
+        self.description = description
+        super().__init__(f"Telegram {method} returned {code}: {description}")
 
 
 def _required_config() -> tuple[str, str, str, str]:
@@ -196,6 +206,51 @@ def download_telegram_photo(file_id: str) -> bytes:
     return b"".join(chunks)
 
 
+def _telegram_api_call(token: str, method: str, params: dict[str, Any] | None = None) -> dict[str, Any]:
+    try:
+        response = requests.get(
+            f"https://api.telegram.org/bot{token}/{method}",
+            params=params,
+            timeout=REQUEST_TIMEOUT,
+        )
+    except requests.RequestException as error:
+        raise RuntimeError(f"Telegram {method} request failed ({type(error).__name__}).") from None
+    try:
+        payload = response.json()
+    except ValueError:
+        payload = {}
+    description = str(payload.get("description", "unknown error")).replace(token, "[redacted]")
+    if not response.ok or not payload.get("ok"):
+        error_code = int(payload.get("error_code") or response.status_code or 500)
+        if method == "getUpdates" and error_code == 409:
+            if "webhook" in description.casefold():
+                description += ". A webhook was found after the preflight check; inspect who re-enabled it."
+            else:
+                description += ". Stop every other process polling this source bot token."
+        raise TelegramAPIError(method, error_code, description)
+    return payload
+
+
+def _ensure_polling_mode(token: str) -> None:
+    """Remove this source bot's webhook before polling, preserving queued updates."""
+    webhook_info = _telegram_api_call(token, "getWebhookInfo").get("result") or {}
+    webhook_url = (webhook_info.get("url") or "").strip()
+    if not webhook_url:
+        return
+
+    pending_count = int(webhook_info.get("pending_update_count") or 0)
+    logger.warning(
+        "Telegram source bot has an active webhook; deleting it with pending updates preserved (%s queued).",
+        pending_count,
+    )
+    _telegram_api_call(token, "deleteWebhook", {"drop_pending_updates": "false"})
+
+    verified = _telegram_api_call(token, "getWebhookInfo").get("result") or {}
+    if (verified.get("url") or "").strip():
+        raise RuntimeError("Telegram source webhook is still active after deleteWebhook.")
+    logger.info("Telegram source webhook removed; pending updates were preserved for polling.")
+
+
 def fetch_telegram_items() -> tuple[list[dict[str, Any]], int | None]:
     """Fetch pending channel posts and the highest update id in the response.
 
@@ -208,28 +263,17 @@ def fetch_telegram_items() -> tuple[list[dict[str, Any]], int | None]:
         return [], None
     token, expected_chat_id, supabase_url, service_key = _required_config()
     last_update_id = get_last_update_id(supabase_url, service_key)
-    try:
-        response = requests.get(
-            f"https://api.telegram.org/bot{token}/getUpdates",
-            params={
-                "offset": last_update_id + 1,
-                "limit": 100,
-                "timeout": 0,
-                "allowed_updates": '["channel_post"]',
-            },
-            timeout=REQUEST_TIMEOUT,
-        )
-    except requests.RequestException as error:
-        # The Bot API URL contains the token. Never propagate the raw exception.
-        raise RuntimeError(f"Telegram getUpdates request failed ({type(error).__name__}).") from None
-    if not response.ok:
-        raise RuntimeError(f"Telegram getUpdates returned HTTP {response.status_code}.")
-    payload = response.json()
-    if not payload.get("ok"):
-        # Do not include request URLs or credentials in exception text/logs.
-        raise RuntimeError(
-            "Telegram getUpdates failed: " + str(payload.get("description", "unknown error"))
-        )
+    _ensure_polling_mode(token)
+    payload = _telegram_api_call(
+        token,
+        "getUpdates",
+        {
+            "offset": last_update_id + 1,
+            "limit": 100,
+            "timeout": 0,
+            "allowed_updates": '["channel_post"]',
+        },
+    )
 
     updates = payload.get("result") or []
     if not updates:
