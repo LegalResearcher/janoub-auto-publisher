@@ -16,12 +16,11 @@ from telegram_source import (
 
 
 class FakeResponse:
-    ok = True
-    status_code = 200
-
-    def __init__(self, payload=None, chunks=None):
+    def __init__(self, payload=None, chunks=None, ok=True, status_code=200):
         self.payload = payload
         self.chunks = chunks or []
+        self.ok = ok
+        self.status_code = status_code
 
     def json(self):
         return self.payload
@@ -139,6 +138,7 @@ class TelegramSourceTests(unittest.TestCase):
             "telegram_source.requests.get",
             side_effect=[
                 FakeResponse([{"update_id": 80}]),
+                FakeResponse({"ok": True, "result": {"url": "", "pending_update_count": 0}}),
                 FakeResponse({"ok": True, "result": [channel_update, other_update]}),
             ],
         ) as get:
@@ -146,8 +146,65 @@ class TelegramSourceTests(unittest.TestCase):
         self.assertEqual(cursor, 82)
         self.assertEqual(len(items), 1)
         self.assertEqual(items[0]["title"], "خبر من المصدر")
-        self.assertEqual(get.call_args_list[1].kwargs["params"]["offset"], 81)
-        self.assertEqual(get.call_args_list[1].kwargs["params"]["allowed_updates"], '["channel_post"]')
+        self.assertEqual(get.call_args_list[2].kwargs["params"]["offset"], 81)
+        self.assertEqual(get.call_args_list[2].kwargs["params"]["allowed_updates"], '["channel_post"]')
+
+    def test_removes_active_webhook_without_dropping_pending_updates(self):
+        channel_update = {
+            "update_id": 91,
+            "channel_post": {
+                "message_id": 7,
+                "date": 1_750_000_000,
+                "chat": {"id": -1001234567890},
+                "text": "خبر أثناء إصلاح الربط",
+            },
+        }
+        env = {
+            "TELEGRAM_SOURCE_BOT_TOKEN": "dedicated-test-token",
+            "TELEGRAM_SOURCE_CHAT_ID": "-1001234567890",
+            "SUPABASE_URL": "https://example.supabase.co",
+            "SUPABASE_SERVICE_KEY": "service-key",
+        }
+        with patch.dict(os.environ, env, clear=True), patch(
+            "telegram_source.requests.get",
+            side_effect=[
+                FakeResponse([]),
+                FakeResponse({"ok": True, "result": {"url": "https://old.example/webhook", "pending_update_count": 3}}),
+                FakeResponse({"ok": True, "result": True}),
+                FakeResponse({"ok": True, "result": {"url": "", "pending_update_count": 3}}),
+                FakeResponse({"ok": True, "result": [channel_update]}),
+            ],
+        ) as get:
+            items, cursor = fetch_telegram_items()
+        self.assertEqual(len(items), 1)
+        self.assertEqual(cursor, 91)
+        self.assertTrue(get.call_args_list[2].args[0].endswith("/deleteWebhook"))
+        self.assertEqual(get.call_args_list[2].kwargs["params"], {"drop_pending_updates": "false"})
+        self.assertTrue(get.call_args_list[4].args[0].endswith("/getUpdates"))
+
+    def test_conflict_after_webhook_check_identifies_other_poller_without_token(self):
+        token = "do-not-leak-polling-token"
+        env = {
+            "TELEGRAM_SOURCE_BOT_TOKEN": token,
+            "TELEGRAM_SOURCE_CHAT_ID": "-1001234567890",
+            "SUPABASE_URL": "https://example.supabase.co",
+            "SUPABASE_SERVICE_KEY": "service-key",
+        }
+        with patch.dict(os.environ, env, clear=True), patch(
+            "telegram_source.requests.get",
+            side_effect=[
+                FakeResponse([]),
+                FakeResponse({"ok": True, "result": {"url": "", "pending_update_count": 0}}),
+                FakeResponse(
+                    {"ok": False, "error_code": 409, "description": "Conflict: terminated by another getUpdates request"},
+                    ok=False,
+                    status_code=409,
+                ),
+            ],
+        ):
+            with self.assertRaisesRegex(RuntimeError, "another getUpdates request") as context:
+                fetch_telegram_items()
+        self.assertNotIn(token, str(context.exception))
 
     def test_download_uses_get_file_and_returns_bytes(self):
         token = "test-photo-bot-token"
@@ -201,6 +258,7 @@ class TelegramSourceTests(unittest.TestCase):
             "telegram_source.requests.get",
             side_effect=[
                 FakeResponse([]),
+                FakeResponse({"ok": True, "result": {"url": "", "pending_update_count": 0}}),
                 requests.ConnectionError(f"https://api.telegram.org/bot{token}/getUpdates"),
             ],
         ):
