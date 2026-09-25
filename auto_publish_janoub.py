@@ -59,6 +59,11 @@ from janoub_news_bot import (
     send_to_telegram,
     log_discovery_ready,
 )
+from telegram_source import (
+    commit_telegram_cursor,
+    fetch_telegram_items,
+    is_configured as is_telegram_source_configured,
+)
 
 # ══════════════════════════════════════════════════════════════════════
 #  🔒 نسخة تلقائية — تعمل فقط على المصدرين اللذين لا يحتاجان تحديث ملفات
@@ -146,6 +151,15 @@ def run():
     recent_published = get_recent_published_titles(hours=24)
 
     items = collect_recent_items(SELECTED_FEEDS)
+    telegram_cursor = None
+    try:
+        if is_telegram_source_configured():
+            telegram_items, telegram_cursor = fetch_telegram_items()
+            items.extend(telegram_items)
+            log.info(f"📨 منشورات تيليجرام الجديدة: {len(telegram_items)}")
+    except Exception as e:
+        # A Telegram source outage or partial setup must not stop the RSS feeds.
+        log.error(f"تعذّر جلب منشورات مصدر تيليجرام؛ ستستمر فيدات RSS: {e}")
     _log_source_counts("بعد سحب RSS وقبل فحص الرابط", items)
     new_items = [
         it for it in items
@@ -167,15 +181,23 @@ def run():
 
     if not new_items:
         log.info("لا يوجد أخبار جديدة حالياً.")
+        commit_telegram_cursor(telegram_cursor)
         return
 
-    log.info(f"🧲 استخراج النص الكامل لكل خبر من صفحته ({len(new_items)} خبر)...")
-    apply_full_extraction(new_items)
+    rss_items = [it for it in new_items if not it.get("_telegram_source")]
+    if rss_items:
+        log.info(f"🧲 استخراج النص الكامل لأخبار RSS من صفحاتها ({len(rss_items)} خبر)...")
+        apply_full_extraction(rss_items)
     excluded_count = sum(1 for it in new_items if it.get("_excluded"))
     if excluded_count:
         new_items = [it for it in new_items if not it.get("_excluded")]
         log.info(f"🚫 استُبعد {excluded_count} خبر (قسم غير معروف/تعذّر اكتشافه من صفحته).")
     _log_source_counts("بعد استخراج النص الكامل واستبعاد الأقسام غير المعروفة", new_items)
+
+    if not new_items:
+        log.info("لا يوجد أخبار جديدة حالياً بعد الاستبعاد.")
+        commit_telegram_cursor(telegram_cursor)
+        return
 
     # فلتر الأقسام المستبعدة كلياً من النشر التلقائي — بعد الاستخراج الكامل
     # مباشرة، لأن قسم أخبار عدن تايم يُصحَّح تلقائياً بهذه المرحلة تحديداً
@@ -190,6 +212,7 @@ def run():
 
     if not new_items:
         log.info("لا يوجد أخبار جديدة حالياً بعد الاستبعاد.")
+        commit_telegram_cursor(telegram_cursor)
         return
 
     ok = fail = skipped = duplicate_count = 0
@@ -243,6 +266,10 @@ def run():
 
         if post_category in NO_IMAGE_CATEGORIES:
             log.info(f"  🚫 قسم «{post_category}»: يُنشر بدون صورة دائماً — تم تجاوز جلب/رفع الصورة.")
+            image_url = None
+            image_url_square = None
+        elif it.get("_telegram_source") and not it.get("image_url"):
+            # A private Telegram post URL is not an article page with og:image.
             image_url = None
             image_url_square = None
         else:
@@ -304,6 +331,11 @@ def run():
             log_discovery_ready([canonical_url])
         else:
             fail += 1
+
+    # Commit only after every Telegram item has succeeded or been deliberately
+    # skipped. A processing/publication failure leaves updates available to retry.
+    if telegram_cursor is not None and fail == 0:
+        commit_telegram_cursor(telegram_cursor)
 
     log.info("═" * 60)
     log.info(f"📊 نُشر: {ok} / فشل: {fail} / تُخُطّي: {skipped} / مكرر (قاعدة البيانات): {duplicate_count}")
