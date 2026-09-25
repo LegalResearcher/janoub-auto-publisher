@@ -60,7 +60,9 @@ from janoub_news_bot import (
     log_discovery_ready,
 )
 from telegram_source import (
+    TelegramFileTooLargeError,
     commit_telegram_cursor,
+    download_telegram_photo,
     fetch_telegram_items,
     is_configured as is_telegram_source_configured,
 )
@@ -263,13 +265,23 @@ def run():
         words, reading_time = word_stats(final_content)
         formatted_content = format_content_paragraphs(final_content)
         item_date = it["pub_date"].isoformat()
+        telegram_image_bytes = None
+        if it.get("_telegram_photo_file_id"):
+            try:
+                telegram_image_bytes = download_telegram_photo(it["_telegram_photo_file_id"])
+            except TelegramFileTooLargeError as e:
+                log.warning(f"  ⚠️  {e} سيُنشر الخبر النصي دون صورة.")
+            except Exception as e:
+                log.error(f"  ❌ تعذّر تنزيل صورة منشور تيليجرام؛ سيُعاد الخبر في التشغيل التالي: {e}")
+                fail += 1
+                continue
 
         if post_category in NO_IMAGE_CATEGORIES:
             log.info(f"  🚫 قسم «{post_category}»: يُنشر بدون صورة دائماً — تم تجاوز جلب/رفع الصورة.")
             image_url = None
             image_url_square = None
-        elif it.get("_telegram_source") and not it.get("image_url"):
-            # A private Telegram post URL is not an article page with og:image.
+        elif it.get("_telegram_source") and telegram_image_bytes is None:
+            # Text-only Telegram posts have no article page to scrape for og:image.
             image_url = None
             image_url_square = None
         else:
@@ -281,6 +293,7 @@ def run():
                 it.get("image_url"),
                 headline_text=final_title,
                 article_url=it.get("link"),
+                source_image_bytes=telegram_image_bytes,
             )
 
         record = {

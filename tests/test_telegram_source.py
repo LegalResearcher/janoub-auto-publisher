@@ -6,8 +6,10 @@ from unittest.mock import patch
 import requests
 
 from telegram_source import (
+    MAX_TELEGRAM_DOWNLOAD_BYTES,
     _post_link,
     _to_news_item,
+    download_telegram_photo,
     fetch_telegram_items,
     is_configured,
 )
@@ -17,14 +19,18 @@ class FakeResponse:
     ok = True
     status_code = 200
 
-    def __init__(self, payload):
+    def __init__(self, payload=None, chunks=None):
         self.payload = payload
+        self.chunks = chunks or []
 
     def json(self):
         return self.payload
 
     def raise_for_status(self):
         return None
+
+    def iter_content(self, chunk_size):
+        yield from self.chunks
 
 
 class TelegramSourceTests(unittest.TestCase):
@@ -47,7 +53,25 @@ class TelegramSourceTests(unittest.TestCase):
         self.assertEqual(item["source_feed"], "telegram://-1001234567890")
         self.assertTrue(item["_telegram_source"])
         self.assertEqual(item["_telegram_update_id"], 91)
+        self.assertIsNone(item["_telegram_photo_file_id"])
         self.assertEqual(item["pub_date"].tzinfo, timezone.utc)
+
+    def test_selects_largest_photo_file_id(self):
+        update = {
+            "update_id": 95,
+            "channel_post": {
+                "message_id": 30,
+                "date": 1_750_000_000,
+                "chat": {"id": -1001234567890},
+                "caption": "صورة الخبر",
+                "photo": [
+                    {"file_id": "small", "width": 90, "height": 90, "file_size": 3000},
+                    {"file_id": "large", "width": 1280, "height": 720, "file_size": 55000},
+                ],
+            },
+        }
+        item = _to_news_item(update, "-1001234567890")
+        self.assertEqual(item["_telegram_photo_file_id"], "large")
 
     def test_accepts_caption_as_full_raw_body(self):
         update = {
@@ -124,6 +148,46 @@ class TelegramSourceTests(unittest.TestCase):
         self.assertEqual(items[0]["title"], "خبر من المصدر")
         self.assertEqual(get.call_args_list[1].kwargs["params"]["offset"], 81)
         self.assertEqual(get.call_args_list[1].kwargs["params"]["allowed_updates"], '["channel_post"]')
+
+    def test_download_uses_get_file_and_returns_bytes(self):
+        token = "test-photo-bot-token"
+        env = {
+            "TELEGRAM_SOURCE_BOT_TOKEN": token,
+            "TELEGRAM_SOURCE_CHAT_ID": "-1001234567890",
+            "SUPABASE_URL": "https://example.supabase.co",
+            "SUPABASE_SERVICE_KEY": "service-key",
+        }
+        with patch.dict(os.environ, env, clear=True), patch(
+            "telegram_source.requests.get",
+            side_effect=[
+                FakeResponse({"ok": True, "result": {"file_path": "photos/a.jpg", "file_size": 7}}),
+                FakeResponse(chunks=[b"image", b"bytes"]),
+            ],
+        ) as get:
+            result = download_telegram_photo("file-id-1")
+        self.assertEqual(result, b"imagebytes")
+        self.assertIn("/getFile", get.call_args_list[0].args[0])
+        self.assertEqual(get.call_args_list[0].kwargs["params"], {"file_id": "file-id-1"})
+        self.assertIn("/file/bot", get.call_args_list[1].args[0])
+        self.assertIn(token, get.call_args_list[1].args[0])
+
+    def test_download_rejects_files_above_bot_api_limit(self):
+        env = {
+            "TELEGRAM_SOURCE_BOT_TOKEN": "test-token",
+            "TELEGRAM_SOURCE_CHAT_ID": "-1001234567890",
+            "SUPABASE_URL": "https://example.supabase.co",
+            "SUPABASE_SERVICE_KEY": "service-key",
+        }
+        with patch.dict(os.environ, env, clear=True), patch(
+            "telegram_source.requests.get",
+            return_value=FakeResponse({
+                "ok": True,
+                "result": {"file_path": "photos/large.jpg", "file_size": MAX_TELEGRAM_DOWNLOAD_BYTES + 1},
+            }),
+        ) as get:
+            with self.assertRaisesRegex(RuntimeError, "20 MB"):
+                download_telegram_photo("file-id-large")
+        self.assertEqual(get.call_count, 1)
 
     def test_request_error_never_leaks_bot_token(self):
         token = "do-not-leak-this-token"
