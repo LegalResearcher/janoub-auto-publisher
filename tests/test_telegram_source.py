@@ -12,6 +12,7 @@ from telegram_source import (
     download_telegram_photo,
     fetch_telegram_items,
     is_configured,
+    merge_photo_replies_with_news_items,
 )
 
 
@@ -71,6 +72,103 @@ class TelegramSourceTests(unittest.TestCase):
         }
         item = _to_news_item(update, "-1001234567890")
         self.assertEqual(item["_telegram_photo_file_id"], "large")
+
+    def test_photo_reply_uses_original_news_text_and_original_post_link(self):
+        update = {
+            "update_id": 96,
+            "channel_post": {
+                "message_id": 46,
+                "date": 1_750_000_100,
+                "chat": {"id": -1001234567890},
+                "photo": [{"file_id": "reply-photo", "width": 1200, "height": 900}],
+                "reply_to_message": {
+                    "message_id": 42,
+                    "date": 1_750_000_000,
+                    "chat": {"id": -1001234567890},
+                    "text": "عنوان الخبر الأصلي\nتفاصيل الخبر الأصلي كاملة.",
+                },
+            },
+        }
+        item = _to_news_item(update, "-1001234567890")
+        self.assertTrue(item["_telegram_photo_reply"])
+        self.assertEqual(item["title"], "عنوان الخبر الأصلي")
+        self.assertEqual(item["raw_body"], "عنوان الخبر الأصلي\nتفاصيل الخبر الأصلي كاملة.")
+        self.assertEqual(item["link"], "https://t.me/c/1234567890/42")
+        self.assertEqual(item["_telegram_photo_file_id"], "reply-photo")
+
+    def test_same_batch_reply_photo_is_merged_into_news_item(self):
+        original = _to_news_item(
+            {
+                "update_id": 97,
+                "channel_post": {
+                    "message_id": 47,
+                    "date": 1_750_000_000,
+                    "chat": {"id": -1001234567890},
+                    "text": "عنوان خبر جديد\nمتن الخبر.",
+                },
+            },
+            "-1001234567890",
+        )
+        reply = _to_news_item(
+            {
+                "update_id": 98,
+                "channel_post": {
+                    "message_id": 48,
+                    "date": 1_750_000_100,
+                    "chat": {"id": -1001234567890},
+                    "photo": [{"file_id": "reply-photo", "width": 1200, "height": 900}],
+                    "reply_to_message": {
+                        "message_id": 47,
+                        "date": 1_750_000_000,
+                        "chat": {"id": -1001234567890},
+                        "text": "عنوان خبر جديد\nمتن الخبر.",
+                    },
+                },
+            },
+            "-1001234567890",
+        )
+        news, late = merge_photo_replies_with_news_items([original, reply])
+        self.assertEqual(len(news), 1)
+        self.assertEqual(late, [])
+        self.assertEqual(news[0]["_telegram_photo_file_id"], "reply-photo")
+        self.assertEqual(news[0]["_telegram_update_id"], 98)
+
+    def test_already_published_story_routes_reply_to_late_path(self):
+        original = _to_news_item(
+            {
+                "update_id": 99,
+                "channel_post": {
+                    "message_id": 49,
+                    "date": 1_750_000_000,
+                    "chat": {"id": -1001234567890},
+                    "text": "عنوان منشور مسبقًا",
+                },
+            },
+            "-1001234567890",
+        )
+        reply = _to_news_item(
+            {
+                "update_id": 100,
+                "channel_post": {
+                    "message_id": 50,
+                    "date": 1_750_000_100,
+                    "chat": {"id": -1001234567890},
+                    "photo": [{"file_id": "reply-photo", "width": 1200, "height": 900}],
+                    "reply_to_message": {
+                        "message_id": 49,
+                        "date": 1_750_000_000,
+                        "chat": {"id": -1001234567890},
+                        "text": "عنوان منشور مسبقًا",
+                    },
+                },
+            },
+            "-1001234567890",
+        )
+        news, late = merge_photo_replies_with_news_items(
+            [original, reply], existing_source_urls={original["link"]}
+        )
+        self.assertEqual(len(news), 1)
+        self.assertEqual(late, [reply])
 
     def test_accepts_caption_as_full_raw_body(self):
         update = {
