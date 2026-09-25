@@ -14,6 +14,11 @@ import requests
 CURSOR_KEY = "alymenet_private_channel"
 CURSOR_TABLE = "bot_source_cursors"
 REQUEST_TIMEOUT = 30
+MAX_TELEGRAM_DOWNLOAD_BYTES = 20 * 1024 * 1024
+
+
+class TelegramFileTooLargeError(RuntimeError):
+    """The hosted Telegram Bot API cannot download this file size."""
 
 
 def _required_config() -> tuple[str, str, str, str]:
@@ -107,6 +112,15 @@ def _to_news_item(update: dict[str, Any], expected_chat_id: str) -> dict[str, An
 
     lines = [line.strip() for line in raw_text.splitlines() if line.strip()]
     title = lines[0] if lines else raw_text
+    photo_sizes = post.get("photo") or []
+    largest_photo = max(
+        photo_sizes,
+        key=lambda photo: (
+            int(photo.get("width") or 0) * int(photo.get("height") or 0),
+            int(photo.get("file_size") or 0),
+        ),
+        default=None,
+    )
     # Keep the complete source message as the raw body. This matches the
     # full-extraction input contract and preserves all information for rewriting.
     message_id = int(post["message_id"])
@@ -125,7 +139,61 @@ def _to_news_item(update: dict[str, Any], expected_chat_id: str) -> dict[str, An
         "author": None,
         "_telegram_source": True,
         "_telegram_update_id": update_id,
+        "_telegram_photo_file_id": (largest_photo or {}).get("file_id"),
     }
+
+
+def download_telegram_photo(file_id: str) -> bytes:
+    """Download a Telegram photo through getFile without exposing the bot token.
+
+    Telegram's hosted Bot API currently limits downloads to 20 MB. Photos above
+    this limit are rejected before the article is published so the cursor can
+    remain pending and be retried after the source is corrected.
+    """
+    token, _, _, _ = _required_config()
+    try:
+        metadata_response = requests.get(
+            f"https://api.telegram.org/bot{token}/getFile",
+            params={"file_id": file_id},
+            timeout=REQUEST_TIMEOUT,
+        )
+    except requests.RequestException as error:
+        raise RuntimeError(f"Telegram getFile request failed ({type(error).__name__}).") from None
+    if not metadata_response.ok:
+        raise RuntimeError(f"Telegram getFile returned HTTP {metadata_response.status_code}.")
+    metadata = metadata_response.json()
+    if not metadata.get("ok"):
+        raise RuntimeError("Telegram getFile failed: " + str(metadata.get("description", "unknown error")))
+    file_info = metadata.get("result") or {}
+    file_path = file_info.get("file_path")
+    file_size = int(file_info.get("file_size") or 0)
+    if not file_path:
+        raise RuntimeError("Telegram getFile response did not include file_path.")
+    if file_size > MAX_TELEGRAM_DOWNLOAD_BYTES:
+        raise TelegramFileTooLargeError("Telegram photo exceeds the Bot API 20 MB download limit.")
+    try:
+        file_response = requests.get(
+            f"https://api.telegram.org/file/bot{token}/{file_path}",
+            timeout=REQUEST_TIMEOUT,
+            stream=True,
+        )
+    except requests.RequestException as error:
+        raise RuntimeError(f"Telegram photo download failed ({type(error).__name__}).") from None
+    if not file_response.ok:
+        raise RuntimeError(f"Telegram photo download returned HTTP {file_response.status_code}.")
+    chunks = []
+    downloaded = 0
+    try:
+        for chunk in file_response.iter_content(chunk_size=64 * 1024):
+            if not chunk:
+                continue
+            downloaded += len(chunk)
+            if downloaded > MAX_TELEGRAM_DOWNLOAD_BYTES:
+                raise TelegramFileTooLargeError("Telegram photo exceeds the Bot API 20 MB download limit.")
+            chunks.append(chunk)
+    except requests.RequestException as error:
+        raise RuntimeError(f"Telegram photo download failed ({type(error).__name__}).") from None
+    return b"".join(chunks)
 
 
 def fetch_telegram_items() -> tuple[list[dict[str, Any]], int | None]:
