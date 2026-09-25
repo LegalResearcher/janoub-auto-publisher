@@ -251,6 +251,41 @@ def _ensure_polling_mode(token: str) -> None:
     logger.info("Telegram source webhook removed; pending updates were preserved for polling.")
 
 
+def _verify_source_channel(token: str, expected_chat_id: str) -> str:
+    bot = (_telegram_api_call(token, "getMe").get("result") or {})
+    bot_id = bot.get("id")
+    username = (bot.get("username") or "unknown").strip().lstrip("@")
+    if not bot_id:
+        raise RuntimeError("Telegram getMe did not return a bot id.")
+    try:
+        member = _telegram_api_call(
+            token,
+            "getChatMember",
+            {"chat_id": expected_chat_id, "user_id": bot_id},
+        ).get("result") or {}
+    except TelegramAPIError as error:
+        if error.code == 400:
+            raise RuntimeError(
+                f"Cannot verify configured Telegram source chat {expected_chat_id}; "
+                "check that it is the channel chat ID and the source bot is a member/admin."
+            ) from None
+        raise
+    status = str(member.get("status") or "unknown")
+    if status not in {"administrator", "creator"}:
+        raise RuntimeError(
+            f"Telegram source bot @{username} (id {bot_id}) is not an administrator "
+            f"of configured chat {expected_chat_id}; current status: {status}."
+        )
+    logger.info(
+        "Verified Telegram source bot @%s (id %s) is %s in configured channel %s.",
+        username,
+        bot_id,
+        status,
+        expected_chat_id,
+    )
+    return username
+
+
 def fetch_telegram_items() -> tuple[list[dict[str, Any]], int | None]:
     """Fetch pending channel posts and the highest update id in the response.
 
@@ -264,6 +299,7 @@ def fetch_telegram_items() -> tuple[list[dict[str, Any]], int | None]:
     token, expected_chat_id, supabase_url, service_key = _required_config()
     last_update_id = get_last_update_id(supabase_url, service_key)
     _ensure_polling_mode(token)
+    _verify_source_channel(token, expected_chat_id)
     payload = _telegram_api_call(
         token,
         "getUpdates",
@@ -277,8 +313,46 @@ def fetch_telegram_items() -> tuple[list[dict[str, Any]], int | None]:
 
     updates = payload.get("result") or []
     if not updates:
+        logger.info(
+            "Telegram source returned no pending channel_post updates for configured channel %s.",
+            expected_chat_id,
+        )
         return [], None
     highest_update_id = max(int(update["update_id"]) for update in updates)
+    channel_posts = [update["channel_post"] for update in updates if isinstance(update.get("channel_post"), dict)]
+    observed_chat_counts: dict[str, int] = {}
+    for post in channel_posts:
+        observed_id = str((post.get("chat") or {}).get("id", "missing"))
+        observed_chat_counts[observed_id] = observed_chat_counts.get(observed_id, 0) + 1
+    matching_posts = [
+        post for post in channel_posts
+        if str((post.get("chat") or {}).get("id", "")) == expected_chat_id
+    ]
+    matching_with_text = sum(
+        bool((post.get("text") or post.get("caption") or "").strip())
+        for post in matching_posts
+    )
+    matching_with_photo = sum(bool(post.get("photo")) for post in matching_posts)
+    logger.info(
+        "Telegram update diagnostics: updates=%s, channel_posts=%s, matching_chat=%s, "
+        "matching_with_text_or_caption=%s, matching_with_photo=%s.",
+        len(updates),
+        len(channel_posts),
+        len(matching_posts),
+        matching_with_text,
+        matching_with_photo,
+    )
+    if channel_posts and not matching_posts:
+        logger.warning(
+            "Telegram channel_post chat IDs do not match TELEGRAM_SOURCE_CHAT_ID; observed IDs: %s.",
+            observed_chat_counts,
+        )
+    elif matching_posts and not matching_with_text:
+        logger.warning(
+            "Telegram updates match the configured channel but contain no text/caption; "
+            "text-only news cannot be rewritten. Matching posts with photos: %s.",
+            matching_with_photo,
+        )
     items = []
     for update in updates:
         item = _to_news_item(update, expected_chat_id)
