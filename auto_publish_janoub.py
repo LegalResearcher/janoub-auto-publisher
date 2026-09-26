@@ -60,6 +60,7 @@ from janoub_news_bot import (
     send_to_telegram,
     log_discovery_ready,
     update_published_post_cover_image,
+    update_published_post_video_url,
 )
 from telegram_source import (
     TelegramFileTooLargeError,
@@ -144,7 +145,7 @@ def _log_source_counts(label: str, items: list[dict]) -> None:
 
 
 def _process_late_telegram_photo_replies(photo_replies: list[dict]) -> bool:
-    """إرفاق صور الردود بالمقالات المنشورة دون إعادة نشرها.
+    """إرفاق صور/روابط فيديو الردود بالمقالات المنشورة دون إعادة نشرها.
 
     يرجع True عند فشل مؤقت يستوجب إبقاء مؤشر Telegram لإعادة المحاولة.
     """
@@ -155,7 +156,7 @@ def _process_late_telegram_photo_replies(photo_replies: list[dict]) -> bool:
             published_post = get_published_post_by_source_url(source_url)
         except Exception as error:
             log.error(
-                "❌ تعذّر العثور على خبر Telegram لربط صورة الرد (%s)؛ ستعاد المحاولة.",
+                "❌ تعذّر العثور على خبر Telegram لربط مرفق الرد (%s)؛ ستعاد المحاولة.",
                 type(error).__name__,
             )
             retry_required = True
@@ -163,9 +164,31 @@ def _process_late_telegram_photo_replies(photo_replies: list[dict]) -> bool:
 
         if not published_post:
             log.info(
-                "ℹ️ صورة رد Telegram للمنشور %s لم تُرفق لأن الخبر الأصلي غير منشور في الموقع.",
+                "ℹ️ مرفق رد Telegram للمنشور %s ينتظر نشر الخبر الأصلي؛ ستعاد المحاولة.",
                 reply.get("_telegram_reply_to_message_id"),
             )
+            retry_required = True
+            continue
+
+        video_url = reply.get("_telegram_video_url")
+        if video_url:
+            try:
+                if not update_published_post_video_url(published_post["id"], video_url):
+                    retry_required = True
+                    continue
+                log.info(
+                    "✅ حُدّث رابط فيديو الخبر المنشور «%s».",
+                    published_post.get("title", "")[:70],
+                )
+            except Exception as error:
+                log.error(
+                    "❌ تعذّر تحديث رابط فيديو Telegram؛ ستعاد المحاولة (%s).",
+                    type(error).__name__,
+                )
+                retry_required = True
+                continue
+
+        if not reply.get("_telegram_photo_file_id"):
             continue
 
         try:
@@ -411,6 +434,7 @@ def run():
             "updated_at": item_date,
             "image_url": image_url,
             "thumbnail_image": image_url_square,
+            "external_video_url": it.get("_telegram_video_url"),
             "meta_title": generate_meta_title(final_title),
             "meta_description": generate_meta_description(final_excerpt),
             "featured": post_category in FEATURED_SLIDER_CATEGORIES,
