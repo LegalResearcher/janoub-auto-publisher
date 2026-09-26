@@ -18,7 +18,7 @@ finally:
 
 
 class AutoPublishTelegramTests(unittest.TestCase):
-    def _item(self, video_url="https://youtu.be/video123"):
+    def _item(self, video_url="https://youtu.be/video123", photo_file_id=None):
         return {
             "title": "عنوان خبر تجريبي",
             "link": "https://t.me/c/1234567890/27",
@@ -30,7 +30,7 @@ class AutoPublishTelegramTests(unittest.TestCase):
             "author": None,
             "_telegram_source": True,
             "_telegram_update_id": 91,
-            "_telegram_photo_file_id": None,
+            "_telegram_photo_file_id": photo_file_id,
             "_telegram_video_url": video_url,
         }
 
@@ -59,6 +59,7 @@ class AutoPublishTelegramTests(unittest.TestCase):
         p("check_similar_published_title_db", return_value=None)
         p("word_stats", return_value=(4, 1))
         p("format_content_paragraphs", return_value="<p>متن محرر كامل.</p>")
+        p("download_telegram_photo", return_value=b"telegram-photo-bytes")
         p("get_post_image_url", return_value=(None, None))
         p("make_slug", return_value="news-slug")
         p("generate_meta_title", return_value="SEO title")
@@ -91,6 +92,24 @@ class AutoPublishTelegramTests(unittest.TestCase):
 
         record = mocked["sb_insert"].call_args.args[0]
         self.assertIsNone(record["external_video_url"])
+
+    def test_photo_attached_to_original_telegram_post_is_downloaded_and_processed(self):
+        item = self._item(video_url="https://x.com/source/status/12345", photo_file_id="original-post-photo")
+        with ExitStack() as stack:
+            mocked = self._patch_run_dependencies(stack, item)
+            mocked["get_post_image_url"].return_value = ("https://cdn.example/photo.webp", None)
+            publisher.run()
+
+        mocked["download_telegram_photo"].assert_called_once_with("original-post-photo")
+        mocked["get_post_image_url"].assert_called_once_with(
+            None,
+            headline_text="عنوان محرر",
+            article_url=item["link"],
+            source_image_bytes=b"telegram-photo-bytes",
+        )
+        record = mocked["sb_insert"].call_args.args[0]
+        self.assertEqual(record["image_url"], "https://cdn.example/photo.webp")
+        self.assertEqual(record["external_video_url"], "https://x.com/source/status/12345")
 
 
 if __name__ == "__main__":

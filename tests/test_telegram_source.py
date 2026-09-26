@@ -83,6 +83,21 @@ class TelegramSourceTests(unittest.TestCase):
         item = _to_news_item(update, "-1001234567890")
         self.assertEqual(item["_telegram_video_url"], "https://x.com/source/status/12345")
 
+    def test_extracts_hidden_video_url_from_text_link_entity(self):
+        update = {
+            "update_id": 941,
+            "channel_post": {
+                "message_id": 291,
+                "date": 1_750_000_000,
+                "chat": {"id": -1001234567890},
+                "text": "عنوان الخبر\nمشاهدة الفيديو",
+                "entities": [{"type": "text_link", "offset": 14, "length": 16,
+                    "url": "https://x.com/source/status/12345"}],
+            },
+        }
+        item = _to_news_item(update, "-1001234567890")
+        self.assertEqual(item["_telegram_video_url"], "https://x.com/source/status/12345")
+
     def test_selects_largest_photo_file_id(self):
         update = {
             "update_id": 95,
@@ -99,6 +114,38 @@ class TelegramSourceTests(unittest.TestCase):
         }
         item = _to_news_item(update, "-1001234567890")
         self.assertEqual(item["_telegram_photo_file_id"], "large")
+
+    def test_extracts_image_sent_as_document(self):
+        update = {
+            "update_id": 951,
+            "channel_post": {
+                "message_id": 301,
+                "date": 1_750_000_000,
+                "chat": {"id": -1001234567890},
+                "caption": "صورة الخبر",
+                "document": {"file_id": "image-document", "mime_type": "image/jpeg", "file_name": "scene.jpg"},
+            },
+        }
+        item = _to_news_item(update, "-1001234567890")
+        self.assertEqual(item["_telegram_photo_file_id"], "image-document")
+
+    def test_edited_post_with_media_is_marked_as_media_edit(self):
+        update = {
+            "update_id": 961,
+            "edited_channel_post": {
+                "message_id": 311,
+                "date": 1_750_000_000,
+                "edit_date": 1_750_000_100,
+                "chat": {"id": -1001234567890},
+                "caption": "عنوان الخبر المعدل\nhttps://youtu.be/video123",
+                "photo": [{"file_id": "edited-photo", "width": 1200, "height": 900}],
+            },
+        }
+        item = _to_news_item(update, "-1001234567890")
+        self.assertTrue(item["_telegram_media_edit"])
+        self.assertFalse(item["_telegram_photo_reply"])
+        self.assertEqual(item["_telegram_photo_file_id"], "edited-photo")
+        self.assertEqual(item["_telegram_video_url"], "https://youtu.be/video123")
 
     def test_photo_reply_uses_original_news_text_and_original_post_link(self):
         update = {
@@ -285,6 +332,29 @@ class TelegramSourceTests(unittest.TestCase):
         self.assertEqual(item["raw_body"], "نص الخبر المصاحب للصورة")
         self.assertEqual(item["link"], "https://t.me/public_source/28")
 
+    def test_edited_media_for_published_post_routes_to_late_attachment_handling(self):
+        edited = _to_news_item({"update_id": 115, "edited_channel_post": {
+            "message_id": 65, "date": 1_750_000_000,
+            "chat": {"id": -1001234567890}, "caption": "خبر مع فيديو https://youtu.be/video123",
+        }}, "-1001234567890")
+        news, late = merge_photo_replies_with_news_items(
+            [edited], existing_source_urls={edited["link"]}
+        )
+        self.assertEqual(news, [])
+        self.assertEqual(late, [edited])
+
+    def test_edited_media_for_unpublished_post_becomes_new_news_item(self):
+        edited = _to_news_item({"update_id": 116, "edited_channel_post": {
+            "message_id": 66, "date": 1_750_000_000,
+            "chat": {"id": -1001234567890},
+            "caption": "عنوان الخبر المعدل\nhttps://youtu.be/video123",
+            "photo": [{"file_id": "edited-photo", "width": 1200, "height": 900}],
+        }}, "-1001234567890")
+        news, late = merge_photo_replies_with_news_items([edited])
+        self.assertEqual(news, [edited])
+        self.assertEqual(late, [])
+        self.assertEqual(edited["_telegram_video_url"], "https://youtu.be/video123")
+
     def test_ignores_other_chats_and_non_channel_updates(self):
         wrong_chat = {
             "update_id": 93,
@@ -350,7 +420,7 @@ class TelegramSourceTests(unittest.TestCase):
         self.assertTrue(get.call_args_list[2].args[0].endswith("/getMe"))
         self.assertEqual(get.call_args_list[3].kwargs["params"], {"chat_id": "-1001234567890", "user_id": 12345})
         self.assertEqual(get.call_args_list[4].kwargs["params"]["offset"], 81)
-        self.assertEqual(get.call_args_list[4].kwargs["params"]["allowed_updates"], '["channel_post"]')
+        self.assertEqual(get.call_args_list[4].kwargs["params"]["allowed_updates"], '["channel_post","edited_channel_post"]')
 
     def test_removes_active_webhook_without_dropping_pending_updates(self):
         channel_update = {
