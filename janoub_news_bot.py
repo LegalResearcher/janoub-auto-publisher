@@ -3172,7 +3172,29 @@ def build_title_only_prompt(title: str, body: str) -> str:
     return TITLE_ONLY_PROMPT.format(title=title, body=body)
 
 
-def build_prompt(title, raw_body, cat):
+def build_prompt(title, raw_body, cat, bypass_content_filters=False, video_url=None):
+    if bypass_content_filters:
+        return f"""
+أنت محرر صحفي في موقع الجنوب فويس. هذا النص وارد من قناة Telegram موثوقة.
+أعد صياغته كاملاً بأسلوب التحرير الصحفي العام للموقع: عنوان دقيق، ملخص موجز،
+ومتن كامل محافظ على الوقائع والأسماء والأرقام، مع لغة واضحة ومهنية وعدم إضافة
+معلومات من خارج المصدر. الاستثناء الوحيد: لا تطبق قيود الحظر أو الاستبعاد أو
+Gatekeeping على هذا الخبر، ولا تصفه بأنه محظور أو بروتوكولي، ولا تُرجع
+EXCLUDED_OFFICIAL_NEWS. اجعل houthi_iran_exclude=false.
+{f'رابط الفيديو محفوظ في حقل خارجي؛ لا تذكره أو تنسخه داخل title أو excerpt أو content: {video_url}' if video_url else ''}
+أعد JSON فقط بهذه الحقول:
+{{
+  "title": "عنوان صحفي محرر",
+  "excerpt": "ملخص خبري موجز",
+  "content": "النص الصحفي الكامل",
+  "houthi_iran_exclude": false
+}}
+
+عنوان المصدر:
+<telegram_title>{title}</telegram_title>
+نص المصدر:
+<telegram_body>{raw_body}</telegram_body>
+"""
     # 1. تحديد طبيعة القسم والكلمات المفتاحية
     is_neutral_cat = any(keyword in cat for keyword in ["الرياضة", "رياضة", "منوعات", "شؤون دولية", "أسعار الصرف", "أسعار صرف العملات", "الذهب"])
     houthi_keywords = ["حوثي", "الحوثي", "صنعاء", "أنصار الله", "المليشيا", "المشاط", "الحوثيين", "اللجنة الثورية"]
@@ -3433,8 +3455,22 @@ def call_with_rotation(prompt_text: str, schema: dict = None) -> str:
             raise
 
 
-def rewrite_article(title: str, body: str, category: str) -> Optional[dict]:
-    prompt = build_prompt(title, body, category)
+def rewrite_article(
+    title: str,
+    body: str,
+    category: str,
+    *,
+    bypass_houthi_iran_filter: bool = False,
+    bypass_content_filters: bool = False,
+    video_url: Optional[str] = None,
+) -> Optional[dict]:
+    prompt = build_prompt(
+        title,
+        body,
+        category,
+        bypass_content_filters=bypass_content_filters,
+        video_url=video_url,
+    )
     raw = call_with_rotation(prompt)
     try:
         import json
@@ -3444,7 +3480,16 @@ def rewrite_article(title: str, body: str, category: str) -> Optional[dict]:
         for key in ("title", "excerpt", "content"):
             if isinstance(data.get(key), str):
                 data[key] = normalize_model_text(data[key])
-        if data.get("houthi_iran_exclude") is True:
+        if video_url:
+            video_pattern = re.escape(video_url.rstrip(".,؛،"))
+            for key in ("excerpt", "content"):
+                if isinstance(data.get(key), str):
+                    data[key] = re.sub(video_pattern, "", data[key])
+        if (
+            data.get("houthi_iran_exclude") is True
+            and not bypass_houthi_iran_filter
+            and not bypass_content_filters
+        ):
             log.info(f"  🚫 [فلتر الحوثي/إيران] خبر هجومي خالص — استُبعد من النشر: {title[:60]}")
             return None
         return data

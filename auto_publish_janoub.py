@@ -321,7 +321,14 @@ def run():
         else:
             log.info(f"✍️  إعادة صياغة: {it['title'][:60]}")
             try:
-                rewritten = rewrite_article(it["title"], it["raw_body"], post_category)
+                rewritten = rewrite_article(
+                    it["title"],
+                    it["raw_body"],
+                    post_category,
+                    bypass_houthi_iran_filter=bool(it.get("_telegram_source")),
+                    bypass_content_filters=bool(it.get("_telegram_source")),
+                    video_url=it.get("_telegram_video_url") if it.get("_telegram_source") else None,
+                )
             except Exception as e:
                 log.error(f"  ❌ فشلت إعادة الصياغة: {e}")
                 if it.get("_telegram_source"):

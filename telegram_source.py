@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import os
 import logging
+import re
 from datetime import datetime, timezone
 from typing import Any
 
@@ -17,6 +18,16 @@ CURSOR_TABLE = "bot_source_cursors"
 REQUEST_TIMEOUT = 30
 MAX_TELEGRAM_DOWNLOAD_BYTES = 20 * 1024 * 1024
 logger = logging.getLogger(__name__)
+
+VIDEO_URL_RE = re.compile(
+    r"https?://(?:www\.)?(?:youtube\.com/watch\?[^\s]+|youtu\.be/[^\s]+|x\.com/[^\s]+|twitter\.com/[^\s]+|vimeo\.com/[^\s]+|facebook\.com/[^\s]+|fb\.watch/[^\s]+|tiktok\.com/[^\s]+)",
+    re.IGNORECASE,
+)
+
+
+def extract_video_url(text: str) -> str | None:
+    match = VIDEO_URL_RE.search(text or "")
+    return match.group(0).rstrip(".,؛،)]}") if match else None
 
 
 class TelegramFileTooLargeError(RuntimeError):
@@ -130,6 +141,7 @@ def _to_news_item(update: dict[str, Any], expected_chat_id: str) -> dict[str, An
     is_photo_reply = bool(reply_to_message_id and largest_photo)
     original_text = (reply_to.get("text") or reply_to.get("caption") or "").strip()
     article_text = original_text if is_photo_reply and original_text else raw_text
+    video_url = extract_video_url(article_text)
     if not article_text and not is_photo_reply:
         return None
 
@@ -163,6 +175,7 @@ def _to_news_item(update: dict[str, Any], expected_chat_id: str) -> dict[str, An
             "_telegram_reply_to_message_id": int(reply_to_message_id),
             "_telegram_update_id": update_id,
             "_telegram_photo_file_id": largest_photo.get("file_id"),
+            "_telegram_video_url": video_url,
         }
 
     if not raw_text:
@@ -181,6 +194,7 @@ def _to_news_item(update: dict[str, Any], expected_chat_id: str) -> dict[str, An
         "_telegram_source": True,
         "_telegram_update_id": update_id,
         "_telegram_photo_file_id": (largest_photo or {}).get("file_id"),
+        "_telegram_video_url": video_url,
     }
 
 

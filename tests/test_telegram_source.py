@@ -56,6 +56,19 @@ class TelegramSourceTests(unittest.TestCase):
         self.assertIsNone(item["_telegram_photo_file_id"])
         self.assertEqual(item["pub_date"].tzinfo, timezone.utc)
 
+    def test_extracts_external_video_url_without_changing_article_text(self):
+        update = {
+            "update_id": 94,
+            "channel_post": {
+                "message_id": 29,
+                "date": 1_750_000_000,
+                "chat": {"id": -1001234567890},
+                "text": "عنوان الفيديو\nتفاصيل الخبر.\nhttps://x.com/source/status/12345",
+            },
+        }
+        item = _to_news_item(update, "-1001234567890")
+        self.assertEqual(item["_telegram_video_url"], "https://x.com/source/status/12345")
+
     def test_selects_largest_photo_file_id(self):
         update = {
             "update_id": 95,
