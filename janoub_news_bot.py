@@ -1549,6 +1549,7 @@ def remove_duplicate_news(
     embedding_threshold: float = DUPLICATE_EMBEDDING_THRESHOLD,
     time_window_minutes: int = DUPLICATE_TIME_WINDOW_MINUTES,
     history_items: Optional[list[dict]] = None,
+    duplicates_out: Optional[list[dict]] = None,
 ) -> list[dict]:
     """يستبعد الأخبار المكررة (نفس الحدث من أكثر من مصدر) بشرطين معاً:
     تشابه دلالي مرتفع جداً بين متجهي العنوانين (Gemini embedding) + تقارب
@@ -1565,9 +1566,12 @@ def remove_duplicate_news(
 
     history_items: أخبار منشورة فعلاً (من تشغيلات سابقة، محتملة من فيد
     مختلف) تُستخدم كمرجع مقارنة فقط ولا تُعاد بالنتيجة. كل عنصر منها يمكن
-    أن يحمل "embedding" (متجه) بجانب "title" و"pub_date"."""
+    أن يحمل "embedding" (متجه) بجانب "title" و"pub_date".
+    duplicates_out: قائمة اختيارية لاستعادة عناصر الوسائط المكررة بأمان
+    لتحديث المقال المنشور المطابق دون إعادة نشر خبر آخر."""
     kept: list[dict] = []
     kept_norm_titles: list[str] = []
+    kept_titles: list[str] = []
     kept_pub_dates: list[Optional[datetime]] = []
     kept_embeddings: list[Optional[list[float]]] = []
     time_window = timedelta(minutes=time_window_minutes)
@@ -1577,6 +1581,7 @@ def remove_duplicate_news(
         pub_date = h.get("pub_date")
         if norm and pub_date is not None:
             kept_norm_titles.append(norm)
+            kept_titles.append(h.get("title", ""))
             kept_pub_dates.append(pub_date)
             kept_embeddings.append(h.get("embedding"))
 
@@ -1609,6 +1614,26 @@ def remove_duplicate_news(
                 if is_match:
                     is_dup = True
                     source = "منشور سابقاً" if i < history_count else "بنفس الدفعة"
+                    if i < history_count:
+                        if duplicates_out is not None and (
+                            it.get("_telegram_video_url") or it.get("_telegram_photo_file_id")
+                        ):
+                            it["_duplicate_match_title"] = kept_titles[i]
+                            it["_duplicate_match_pub_date"] = existing_pub_date
+                            duplicates_out.append(it)
+                    else:
+                        # إذا كانت نسخة Telegram المرفقة بوسائط مكررة لخبر
+                        # آخر في الدفعة نفسها، ننقل الوسائط إلى الخبر الذي
+                        # سيُنشر فعلاً بدلاً من فقدانها مع نسخة التكرار.
+                        matched_item = kept[i - history_count]
+                        for media_key in ("_telegram_photo_file_id", "_telegram_video_url"):
+                            if it.get(media_key):
+                                matched_item[media_key] = it[media_key]
+                        if it.get("_telegram_update_id"):
+                            matched_item["_telegram_update_id"] = max(
+                                int(matched_item.get("_telegram_update_id") or 0),
+                                int(it["_telegram_update_id"]),
+                            )
                     log.info(
                         f"  🔁 خبر مكرر تم استبعاده (تشابه {method_label} {sim:.0%} + تقارب زمني، {source}): "
                         f"{it.get('title', '')[:70]}"
@@ -1618,6 +1643,7 @@ def remove_duplicate_news(
             continue
         kept.append(it)
         kept_norm_titles.append(norm)
+        kept_titles.append(it.get("title", ""))
         kept_pub_dates.append(pub_date)
         kept_embeddings.append(emb)
 
@@ -2127,6 +2153,28 @@ def get_published_post_by_source_url(source_url: str) -> Optional[dict]:
     if response.status_code != 200:
         log.error(
             "❌ تعذّر البحث عن مقال Telegram المنشور [%s]: %s",
+            response.status_code,
+            response.text[:200],
+        )
+        response.raise_for_status()
+    rows = response.json()
+    return rows[0] if rows else None
+
+
+def get_published_post_by_title(title: str) -> Optional[dict]:
+    """يعثر على مقال منشور مطابق تمامًا لعنوان مرجع كشف التكرار."""
+    url = f"{SUPABASE_URL}/rest/v1/{TABLE_NAME}"
+    params = {
+        "select": "id,title,status,image_url,external_video_url",
+        "title": f"eq.{title}",
+        "status": "eq.published",
+        "order": "created_at.desc",
+        "limit": "1",
+    }
+    response = requests.get(url, headers=sb_headers(), params=params, timeout=REQUEST_TIMEOUT)
+    if response.status_code != 200:
+        log.error(
+            "❌ تعذّر البحث عن مقال منشور مطابق لعنوان مرجع التكرار [%s]: %s",
             response.status_code,
             response.text[:200],
         )

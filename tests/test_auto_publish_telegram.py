@@ -12,6 +12,7 @@ os.environ["SUPABASE_URL"] = "https://example.invalid"
 os.environ["SUPABASE_SERVICE_KEY"] = "unit-test-service-key"
 os.chdir(_TEST_TMP.name)
 try:
+    import janoub_news_bot as janoub
     import auto_publish_janoub as publisher
 finally:
     os.chdir(_ORIGINAL_CWD)
@@ -49,7 +50,7 @@ class AutoPublishTelegramTests(unittest.TestCase):
         p("collect_recent_items", return_value=[])
         p("is_telegram_source_configured", return_value=True)
         p("fetch_telegram_items", return_value=([item], 91))
-        p("remove_duplicate_news", side_effect=lambda items, history_items: items)
+        p("remove_duplicate_news", side_effect=lambda items, history_items, duplicates_out=None: items)
         p("apply_full_extraction")
         p("rewrite_article", return_value={
             "title": "عنوان محرر",
@@ -65,6 +66,13 @@ class AutoPublishTelegramTests(unittest.TestCase):
         p("generate_meta_title", return_value="SEO title")
         p("generate_meta_description", return_value="SEO description")
         p("sb_insert", return_value="post-id")
+        p("get_published_post_by_title", return_value={
+            "id": "existing-post-id",
+            "title": "عنوان الخبر الأصلي",
+            "external_video_url": None,
+        })
+        p("update_published_post_video_url", return_value=True)
+        p("update_published_post_cover_image", return_value=True)
         p("log_published_title")
         p("save_blocked_link")
         p("seed_views")
@@ -110,6 +118,66 @@ class AutoPublishTelegramTests(unittest.TestCase):
         record = mocked["sb_insert"].call_args.args[0]
         self.assertEqual(record["image_url"], "https://cdn.example/photo.webp")
         self.assertEqual(record["external_video_url"], "https://x.com/source/status/12345")
+
+    def test_duplicate_telegram_video_updates_existing_article_instead_of_being_dropped(self):
+        item = self._item(video_url="https://x.com/aljanoubvoice2/status/2103854341472059432")
+
+        def mark_as_duplicate(items, history_items, duplicates_out=None):
+            if duplicates_out is not None:
+                for duplicate in items:
+                    duplicate["_duplicate_match_title"] = "عنوان الخبر الأصلي"
+                    duplicates_out.append(duplicate)
+            return []
+
+        with ExitStack() as stack:
+            mocked = self._patch_run_dependencies(stack, item)
+            mocked["remove_duplicate_news"].side_effect = mark_as_duplicate
+            publisher.run()
+
+        mocked["get_published_post_by_title"].assert_called_once_with("عنوان الخبر الأصلي")
+        mocked["update_published_post_video_url"].assert_called_once_with(
+            "existing-post-id", "https://x.com/aljanoubvoice2/status/2103854341472059432"
+        )
+        mocked["sb_insert"].assert_not_called()
+        mocked["commit_telegram_cursor"].assert_called_once_with(91)
+
+    def test_remove_duplicate_news_returns_historical_media_match_for_update(self):
+        now = datetime.now(timezone.utc)
+        item = self._item(video_url="https://x.com/source/status/123")
+        item["pub_date"] = now
+        duplicates = []
+        with (
+            patch.object(janoub, "get_title_embedding", return_value=[1.0, 0.0]),
+            patch.object(janoub, "_cosine_similarity", return_value=0.99),
+        ):
+            kept = janoub.remove_duplicate_news(
+                [item],
+                history_items=[{
+                    "title": "عنوان الخبر السابق",
+                    "pub_date": now,
+                    "embedding": [1.0, 0.0],
+                }],
+                duplicates_out=duplicates,
+            )
+
+        self.assertEqual(kept, [])
+        self.assertEqual(duplicates, [item])
+        self.assertEqual(item["_duplicate_match_title"], "عنوان الخبر السابق")
+
+    def test_duplicate_telegram_video_merges_into_kept_story_from_same_batch(self):
+        now = datetime.now(timezone.utc)
+        primary = self._item(video_url=None)
+        primary.update({"title": "عنوان الخبر الأساسي", "pub_date": now})
+        duplicate = self._item(video_url="https://x.com/source/status/123")
+        duplicate.update({"title": "عنوان صياغته مختلفة", "pub_date": now})
+        with (
+            patch.object(janoub, "get_title_embedding", return_value=[1.0, 0.0]),
+            patch.object(janoub, "_cosine_similarity", return_value=0.99),
+        ):
+            kept = janoub.remove_duplicate_news([primary, duplicate], history_items=[])
+
+        self.assertEqual(kept, [primary])
+        self.assertEqual(primary["_telegram_video_url"], "https://x.com/source/status/123")
 
 
 if __name__ == "__main__":
